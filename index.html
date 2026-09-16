@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Icons Home · 个人图标收藏</title>
+<meta name="description" content="个人图标收藏网页：按分类浏览图标，点击即可复制图标链接。">
+<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="%23161e2e"/><rect x="14" y="14" width="36" height="36" rx="8" fill="%23ffb454"/><rect x="22" y="22" width="9" height="9" rx="2" fill="%23161e2e"/><rect x="34" y="22" width="9" height="9" rx="2" fill="%23161e2e"/><rect x="22" y="34" width="9" height="9" rx="2" fill="%23161e2e"/><rect x="34" y="34" width="9" height="9" rx="2" fill="%23161e2e"/></svg>'>
+<style>
+  :root {
+    --bg: #0e1420;
+    --surface: #161e2e;
+    --surface-2: #1c2638;
+    --border: #26324a;
+    --text: #e9eef8;
+    --muted: #94a0b8;
+    --accent: #ffb454;
+    --accent-soft: rgba(255, 180, 84, .14);
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { -webkit-text-size-adjust: 100%; }
+  button, input { font-family: inherit; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  a { color: inherit; }
+
+  /* ===== 顶部栏 ===== */
+  .topbar {
+    position: sticky; top: 0; z-index: 20;
+    background: rgba(14, 20, 32, .88);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border);
+  }
+  .topbar-inner {
+    max-width: 1200px; margin: 0 auto; padding: 14px 20px;
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; margin-right: auto; }
+  .brand-logo { width: 34px; height: 34px; flex: none; }
+  .brand-title { font-size: 18px; font-weight: 700; letter-spacing: .02em; }
+  .brand-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+  .search-wrap { position: relative; }
+  .search-wrap svg {
+    position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+    width: 15px; height: 15px; stroke: var(--muted); pointer-events: none;
+  }
+  .search-input {
+    width: 230px; padding: 9px 12px 9px 36px;
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--border); border-radius: 999px;
+    font-size: 14px; outline: none; transition: border-color .15s;
+  }
+  .search-input:focus { border-color: var(--accent); }
+  .search-input::placeholder { color: var(--muted); }
+
+  .icon-btn {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 9px 14px; background: var(--surface); color: var(--text);
+    border: 1px solid var(--border); border-radius: 999px;
+    font-size: 13px; cursor: pointer; transition: border-color .15s, color .15s;
+  }
+  .icon-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .icon-btn svg { width: 15px; height: 15px; stroke: currentColor; }
+
+  /* ===== 分类栏 ===== */
+  .categories {
+    max-width: 1200px; margin: 0 auto; padding: 14px 20px 0;
+    display: flex; gap: 8px; flex-wrap: wrap;
+  }
+  .pill {
+    padding: 7px 14px; background: var(--surface); color: var(--muted);
+    border: 1px solid var(--border); border-radius: 999px;
+    font-size: 13px; cursor: pointer; transition: all .15s;
+  }
+  .pill:hover { color: var(--text); border-color: var(--accent); }
+  .pill.active {
+    background: var(--accent-soft); color: var(--accent);
+    border-color: var(--accent);
+  }
+  .pill .count { opacity: .7; font-size: 12px; margin-left: 4px; }
+
+  /* ===== 图标网格 ===== */
+  main { flex: 1; width: 100%; max-width: 1200px; margin: 0 auto; padding: 24px 20px 40px; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+    gap: 14px;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px 10px 12px;
+    display: flex; flex-direction: column; align-items: center; gap: 10px;
+    cursor: pointer; user-select: none;
+    transition: transform .12s, border-color .15s, background .15s;
+  }
+  .card:hover { border-color: var(--accent); background: var(--surface-2); transform: translateY(-2px); }
+  .card:active { transform: translateY(0); }
+  .card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .card-icon {
+    width: 56px; height: 56px; object-fit: contain;
+    display: block; pointer-events: none;
+  }
+  .card-name {
+    font-size: 13px; color: var(--text);
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .card-url {
+    font-size: 11px; color: var(--muted);
+    font-family: Consolas, "Cascadia Mono", monospace;
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  .empty {
+    grid-column: 1 / -1; text-align: center; padding: 70px 0; color: var(--muted);
+  }
+  .empty .empty-key { color: var(--accent); }
+
+  /* ===== 页脚 ===== */
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 18px 20px; text-align: center;
+    color: var(--muted); font-size: 13px;
+  }
+  footer b { color: var(--text); font-weight: 600; }
+
+  /* ===== 设置面板 ===== */
+  .settings-panel {
+    display: none;
+    position: fixed; top: 74px; right: 20px; z-index: 30;
+    width: 340px; max-width: calc(100vw - 40px);
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 14px; padding: 18px; box-shadow: 0 18px 50px rgba(0,0,0,.45);
+  }
+  .settings-panel.open { display: block; }
+  .settings-panel h3 { font-size: 15px; margin-bottom: 4px; }
+  .settings-panel .tip { font-size: 12px; color: var(--muted); line-height: 1.6; margin-bottom: 12px; }
+  .settings-panel label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .settings-panel input[type="text"] {
+    width: 100%; padding: 9px 12px; margin-bottom: 12px;
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px; font-size: 13px; outline: none;
+  }
+  .settings-panel input[type="text"]:focus { border-color: var(--accent); }
+  .settings-panel .row { display: flex; gap: 8px; }
+  .settings-panel .btn {
+    flex: 1; padding: 8px 0; text-align: center; cursor: pointer;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: var(--surface); color: var(--text); font-size: 13px;
+  }
+  .settings-panel .btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ===== 提示气泡 ===== */
+  .toast {
+    position: fixed; left: 50%; bottom: 34px; z-index: 40;
+    transform: translateX(-50%) translateY(16px);
+    background: #202b42; border: 1px solid var(--border);
+    color: var(--text); border-radius: 10px;
+    padding: 11px 18px; font-size: 13px;
+    opacity: 0; pointer-events: none;
+    transition: opacity .18s, transform .18s;
+    max-width: min(560px, calc(100vw - 40px));
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast .toast-url {
+    display: block; margin-top: 4px; font-size: 12px; color: var(--accent);
+    font-family: Consolas, "Cascadia Mono", monospace;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  /* ===== 移动端适配 ===== */
+  @media (max-width: 640px) {
+    .topbar-inner { padding: 12px 14px; }
+    .search-input { width: 100%; }
+    .toolbar { width: 100%; }
+    .search-wrap { flex: 1; min-width: 180px; }
+    .grid { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; }
+    .card { padding: 14px 8px 10px; }
+    .card-icon { width: 44px; height: 44px; }
+    .settings-panel { top: 120px; right: 14px; }
+  }
+</style>
+</head>
+<body>
+
+  <!-- ===== 顶部栏 ===== -->
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <svg class="brand-logo" viewBox="0 0 64 64" aria-hidden="true">
+          <rect width="64" height="64" rx="14" fill="#1c2638"/>
+          <rect x="12" y="12" width="40" height="40" rx="9" fill="#ffb454"/>
+          <rect x="21" y="21" width="9" height="9" rx="2" fill="#161e2e"/>
+          <rect x="34" y="21" width="9" height="9" rx="2" fill="#161e2e"/>
+          <rect x="21" y="34" width="9" height="9" rx="2" fill="#161e2e"/>
+          <rect x="34" y="34" width="9" height="9" rx="2" fill="#161e2e"/>
+        </svg>
+        <div>
+          <div class="brand-title" id="site-title">Icons Home</div>
+          <div class="brand-sub">个人图标收藏 · 点击图标卡片复制链接</div>
+        </div>
+      </div>
+      <div class="toolbar">
+        <div class="search-wrap">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round">
+            <circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/>
+          </svg>
+          <input type="text" class="search-input" id="search-input"
+                 placeholder="搜索图标名称或描述…" aria-label="搜索图标">
+        </div>
+        <button type="button" class="icon-btn" id="settings-btn" aria-label="打开设置">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
+          设置
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ===== 分类栏 ===== -->
+  <nav class="categories" id="categories" aria-label="图标分类"></nav>
+
+  <!-- ===== 图标网格 ===== -->
+  <main>
+    <div class="grid" id="grid"></div>
+  </main>
+
+  <!-- ===== 页脚 ===== -->
+  <footer>共 <b id="total-count">0</b> 个图标 · 点击任意图标卡片即可复制链接到剪贴板</footer>
+
+  <!-- ===== 设置面板 ===== -->
+  <div class="settings-panel" id="settings-panel" role="dialog" aria-label="设置">
+    <h3>设置</h3>
+    <p class="tip">图标 URL 前缀。留空时复制「当前页面地址 + icons/文件名」；填写后复制「前缀 + icons/文件名」，可填 CDN 或网站根地址。</p>
+    <label for="base-input">URL 前缀（可留空）</label>
+    <input type="text" id="base-input" placeholder="如 https://cdn.example.com/">
+    <div class="row">
+      <button type="button" class="btn" id="base-reset">恢复默认</button>
+      <button type="button" class="btn" id="settings-close">关闭</button>
+    </div>
+  </div>
+
+  <!-- ===== 提示气泡 ===== -->
+  <div class="toast" id="toast" role="status"></div>
+
+<script src="data.js"></script>
+<script>
+/* ============================================================
+ * Icons Home - 页面逻辑（一般无需修改）
+ * 数据在 data.js 中维护：改分类、加图标都在那里操作。
+ * ============================================================ */
+(function () {
+  var DATA = window.ICON_DATA || { title: "Icons Home", categories: [], icons: [] };
+  var state = { category: "all", keyword: "" };
+  var BASE_KEY = "icons-home-baseurl";
+
+  var grid = document.getElementById("grid");
+  var categoriesNav = document.getElementById("categories");
+  var searchInput = document.getElementById("search-input");
+  var baseInput = document.getElementById("base-input");
+  var settingsPanel = document.getElementById("settings-panel");
+  var toast = document.getElementById("toast");
+  var toastTimer = null;
+
+  /* ---------- 工具函数 ---------- */
+  function el(tag, cls, text) {
+    var node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text != null) node.textContent = text;
+    return node;
+  }
+
+  function iconUrl(icon) {
+    var base = baseInput.value.trim();
+    var path = "icons/" + icon.file;
+    if (base) {
+      if (base.slice(-1) !== "/") base += "/";
+      return base + path;
+    }
+    try { return new URL(path, location.href).href; }
+    catch (e) { return path; }
+  }
+
+  function copyText(text, done) {
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(fallbackCopy(text)); });
+    } else {
+      done(fallbackCopy(text));
+    }
+  }
+  function fallbackCopy(text) {
+    var ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.focus(); ta.select();
+    var ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+    document.body.removeChild(ta);
+    return ok;
+  }
+
+  function showToast(msg, url) {
+    toast.textContent = "";
+    toast.appendChild(document.createTextNode(msg));
+    if (url) {
+      var u = el("span", "toast-url", url);
+      toast.appendChild(u);
+    }
+    toast.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { toast.classList.remove("show"); }, 2400);
+  }
+
+  /* ---------- 渲染 ---------- */
+  function renderCategories() {
+    categoriesNav.textContent = "";
+    var list = [{ id: "all", name: "全部" }].concat(DATA.categories || []);
+    var counts = {};
+    (DATA.icons || []).forEach(function (ic) {
+      counts[ic.category] = (counts[ic.category] || 0) + 1;
+      counts.all = (counts.all || 0) + 1;
+    });
+    list.forEach(function (cat) {
+      var btn = el("button", "pill" + (state.category === cat.id ? " active" : ""), cat.name);
+      var n = counts[cat.id] || 0;
+      if (n) btn.appendChild(el("span", "count", "(" + n + ")"));
+      btn.type = "button";
+      btn.setAttribute("aria-pressed", state.category === cat.id ? "true" : "false");
+      btn.addEventListener("click", function () {
+        state.category = cat.id;
+        renderCategories();
+        renderGrid();
+      });
+      categoriesNav.appendChild(btn);
+    });
+  }
+
+  function renderGrid() {
+    grid.textContent = "";
+    var kw = state.keyword.toLowerCase();
+    var matched = (DATA.icons || []).filter(function (ic) {
+      if (state.category !== "all" && ic.category !== state.category) return false;
+      if (!kw) return true;
+      var hay = (ic.name + " " + (ic.desc || "")).toLowerCase();
+      return hay.indexOf(kw) !== -1;
+    });
+
+    document.getElementById("total-count").textContent = (DATA.icons || []).length;
+
+    if (!matched.length) {
+      var empty = el("div", "empty");
+      empty.appendChild(document.createTextNode("没有找到"));
+      if (kw) empty.appendChild(el("span", "empty-key", "「" + state.keyword + "」"));
+      empty.appendChild(document.createTextNode("对应的图标，试试其它关键词或分类。"));
+      grid.appendChild(empty);
+      return;
+    }
+
+    matched.forEach(function (ic) {
+      var card = el("div", "card");
+      card.tabIndex = 0;
+      card.setAttribute("role", "button");
+      card.setAttribute("aria-label", "复制 " + ic.name + " 的链接");
+      card.title = ic.desc || (ic.name + "（点击复制链接）");
+
+      var img = document.createElement("img");
+      img.className = "card-icon";
+      img.src = "icons/" + ic.file;
+      img.alt = ic.name;
+      img.loading = "lazy";
+      img.addEventListener("error", function () {
+        img.style.opacity = ".25";
+      });
+
+      var name = el("span", "card-name", ic.name);
+      var url = el("span", "card-url", iconUrl(ic));
+
+      card.appendChild(img);
+      card.appendChild(name);
+      card.appendChild(url);
+
+      card.addEventListener("click", function () {
+        var u = iconUrl(ic);
+        copyText(u, function (ok) {
+          showToast(ok ? "已复制链接" : "复制失败，请手动选择下方链接", ok ? u : null);
+          if (!ok) { url.textContent = u; }
+        });
+      });
+      card.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); card.click(); }
+      });
+      grid.appendChild(card);
+    });
+  }
+
+  /* ---------- 搜索 ---------- */
+  searchInput.addEventListener("input", function () {
+    state.keyword = this.value.trim();
+    renderGrid();
+  });
+
+  /* ---------- 设置面板 ---------- */
+  function openSettings() {
+    settingsPanel.classList.add("open");
+    baseInput.focus();
+    baseInput.select();
+  }
+  document.getElementById("settings-btn").addEventListener("click", function () {
+    settingsPanel.classList.contains("open") ? settingsPanel.classList.remove("open") : openSettings();
+  });
+  document.getElementById("settings-close").addEventListener("click", function () {
+    settingsPanel.classList.remove("open");
+  });
+  document.getElementById("base-reset").addEventListener("click", function () {
+    baseInput.value = (DATA.baseUrl || "").trim();
+    try { localStorage.removeItem(BASE_KEY); } catch (e) {}
+    showToast("已恢复默认 URL 前缀");
+  });
+  baseInput.addEventListener("input", function () {
+    try { localStorage.setItem(BASE_KEY, this.value.trim()); } catch (e) {}
+  });
+  document.addEventListener("click", function (e) {
+    if (settingsPanel.classList.contains("open") &&
+        !settingsPanel.contains(e.target) &&
+        e.target.id !== "settings-btn") {
+      settingsPanel.classList.remove("open");
+    }
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") settingsPanel.classList.remove("open");
+  });
+
+  /* ---------- 初始化 ---------- */
+  var savedBase = "";
+  try { savedBase = localStorage.getItem(BASE_KEY); } catch (e) {}
+  baseInput.value = (savedBase != null ? savedBase : (DATA.baseUrl || "")).trim();
+  document.getElementById("site-title").textContent = DATA.title || "Icons Home";
+  document.title = (DATA.title || "Icons Home") + " · 个人图标收藏";
+  renderCategories();
+  renderGrid();
+})();
+</script>
+</body>
+</html>

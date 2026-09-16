@@ -1,0 +1,7 @@
+# 截图自检产物
+_shots/
+
+# 系统文件
+Thumbs.db
+.DS_Store
+desktop.ini
