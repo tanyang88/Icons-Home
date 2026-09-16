@@ -364,13 +364,15 @@
       <button type="button" class="btn" id="settings-close">关闭</button>
     </div>
     <div class="upload-manage">
-      <h4 id="upload-manage-title">本地上传的图标（0 个）</h4>
-      <p class="um-tip">上传的图标保存在当前浏览器本地。发布到 nginx / 外网前，请先「下载图片」放进项目 icons/ 目录，再把下方记录粘贴进 data.js，即可长期生效。</p>
-      <textarea id="export-records" readonly placeholder="还没有上传记录"></textarea>
-      <div class="row">
-        <button type="button" class="btn" id="export-download">下载图片</button>
-        <button type="button" class="btn" id="export-copy">复制记录</button>
-        <button type="button" class="btn" id="upload-clear">清空</button>
+      <h4 id="upload-manage-title">上传的图标（0 个）</h4>
+      <p class="um-tip" id="um-tip">上传的图标保存在当前浏览器本地。发布到 nginx / 外网前，请先「下载图片」放进项目 icons/ 目录，再把下方记录粘贴进 data.js，即可长期生效。</p>
+      <div id="um-export">
+        <textarea id="export-records" readonly placeholder="还没有上传记录"></textarea>
+        <div class="row">
+          <button type="button" class="btn" id="export-download">下载图片</button>
+          <button type="button" class="btn" id="export-copy">复制记录</button>
+          <button type="button" class="btn" id="upload-clear">清空</button>
+        </div>
       </div>
     </div>
   </div>
@@ -427,6 +429,11 @@
   var uploadSubmit = document.getElementById("upload-submit");
   var uploadQueue = [];
 
+  /* 服务模式：通过 upload_server.py / Docker / nginx 反代访问时为 true；
+     双击本地 HTML（file://）打开时为 false，退回浏览器本地存储方案 */
+  var SERVER_MODE = location.protocol === "http:" || location.protocol === "https:";
+  var serverUploads = [];
+
   /* ---------- 工具函数 ---------- */
   function el(tag, cls, text) {
     var node = document.createElement(tag);
@@ -457,14 +464,23 @@
   function saveUploads(list) {
     localStorage.setItem(UPLOADS_KEY, JSON.stringify(list));
   }
-  /* 页面显示的全部图标 = data.js 配置图标 + 本地上传图标（_src 为图片 DataURL） */
+  /* 页面显示的全部图标 = data.js 配置图标 + 上传的图标 */
   function allIcons() {
     var configured = (DATA.icons || []).map(function (ic) {
       return { name: ic.name, category: ic.category, file: ic.file, link: ic.link, desc: ic.desc, _src: "" };
     });
-    var uploaded = loadUploads().map(function (u) {
-      return { name: u.name, category: u.category, file: u.name, link: "", desc: "本地上传", _src: u.dataUrl };
-    });
+    var uploaded;
+    if (SERVER_MODE) {
+      /* 服务模式：上传的图片已写入服务器 icons/ 目录，直接按文件名渲染 */
+      uploaded = serverUploads.map(function (u) {
+        return { name: u.name, category: u.category, file: u.name, link: "", desc: "网页上传", _src: "" };
+      });
+    } else {
+      /* 静态模式（file:// 双击打开）：图片以 DataURL 存在浏览器本地 */
+      uploaded = loadUploads().map(function (u) {
+        return { name: u.name, category: u.category, file: u.name, link: "", desc: "本地上传", _src: u.dataUrl };
+      });
+    }
     return configured.concat(uploaded);
   }
   function iconSrc(ic) {
@@ -513,7 +529,7 @@
       catNames[c.id] = c.name;
     });
     var all = allIcons();
-    /* 本地上传图标使用了 data.js 里没有的新分类时，自动追加到分类栏 */
+    /* 上传图标使用了 data.js 里没有的新分类时，自动追加到分类栏 */
     all.forEach(function (ic) {
       if (!(ic.category in catNames)) {
         catOrder.push(ic.category);
@@ -686,7 +702,7 @@
   });
 
   /* ============================================================
-   * 上传弹窗：点击 / 拖拽选择图片 → 选择分类 → 保存到本地并刷新
+   * 上传弹窗：点击 / 拖拽选择图片 → 选择分类 → 提交到后端并刷新
    * ============================================================ */
   function openUpload() {
     uploadMask.classList.add("open");
@@ -809,6 +825,56 @@
 
   uploadSubmit.addEventListener("click", function () {
     if (!uploadQueue.length) return;
+    if (SERVER_MODE) {
+      uploadViaServer();
+    } else {
+      uploadViaLocalStorage();
+    }
+  });
+
+  /* 服务模式：POST 到后端，图片直接写入服务器 icons/，记录写入 data/uploads.json */
+  function uploadViaServer() {
+    var total = uploadQueue.length;
+    var failed = false;
+    uploadSubmit.disabled = true;
+    uploadSubmit.textContent = "上传中…";
+    function finishUploadFail() {
+      uploadSubmit.disabled = false;
+      uploadSubmit.textContent = uploadQueue.length ? "开始上传（" + uploadQueue.length + "）" : "开始上传";
+    }
+    function next(i) {
+      if (failed) return;
+      if (i >= total) {
+        showToast("已上传 " + total + " 个图标，正在刷新…");
+        setTimeout(function () { location.reload(); }, 600);
+        return;
+      }
+      var item = uploadQueue[i];
+      var category = item.newCatName || item.category || "other";
+      var fd = new FormData();
+      fd.append("file", item.file, item.name);
+      fd.append("category", category);
+      fetch("api/upload", { method: "POST", body: fd }).then(function (r) {
+        return r.json();
+      }).then(function (res) {
+        if (res && res.ok) {
+          next(i + 1);
+        } else {
+          failed = true;
+          showToast("上传失败：" + ((res && res.error) || "未知错误"));
+          finishUploadFail();
+        }
+      }).catch(function () {
+        failed = true;
+        showToast("无法连接上传服务，请确认已启动 upload_server.py（或 Docker）");
+        finishUploadFail();
+      });
+    }
+    next(0);
+  }
+
+  /* 静态模式（file:// 双击打开）：保存到浏览器本地存储 */
+  function uploadViaLocalStorage() {
     var list = loadUploads();
     var idx = 0;
     var failed = false;
@@ -844,7 +910,7 @@
       reader.readAsDataURL(item.file);
     }
     next();
-  });
+  }
 
   /* ============================================================
    * 上传管理（设置面板内）：导出图片 / 复制 data.js 追加记录 / 清空
@@ -857,8 +923,8 @@
     return "// 图片请先放入项目 icons/ 目录，再把以下记录追加到 data.js 的 icons 数组：\n" + lines.join("\n");
   }
   function renderUploadManage() {
-    var up = loadUploads();
-    document.getElementById("upload-manage-title").textContent = "本地上传的图标（" + up.length + " 个）";
+    var up = SERVER_MODE ? serverUploads : loadUploads();
+    document.getElementById("upload-manage-title").textContent = "上传的图标（" + up.length + " 个）";
     document.getElementById("export-records").value = exportRecordsText(up);
   }
   document.getElementById("export-download").addEventListener("click", function () {
@@ -894,6 +960,19 @@
   baseInput.value = (savedBase != null ? savedBase : (DATA.baseUrl || "")).trim();
   document.getElementById("site-title").textContent = DATA.title || "Icons Home";
   document.title = (DATA.title || "Icons Home") + " · 个人图标收藏";
+
+  /* 服务模式：拉取后端上传列表合并渲染；静态模式：保留「导出到 data.js」入口 */
+  if (SERVER_MODE) {
+    document.getElementById("um-tip").textContent = "已连接后端服务：上传的图片直接保存到服务器项目 icons/ 目录，记录写入 data/uploads.json，所有访问者刷新后即可看到。";
+    document.getElementById("um-export").style.display = "none";
+    fetch("api/uploads", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (d) {
+      if (d && d.ok && Array.isArray(d.uploads)) serverUploads = d.uploads;
+      renderCategories();
+      renderGrid();
+      renderUploadManage();
+    }).catch(function () { /* 后端暂不可用：仅显示 data.js 配置图标 */ });
+  }
+
   renderCategories();
   renderGrid();
 })();

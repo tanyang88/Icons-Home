@@ -1,0 +1,6 @@
+# 构建镜像时排除的内容
+_shots/
+.git/
+__pycache__/
+*.pyc
+data/

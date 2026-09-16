@@ -1,6 +1,9 @@
 # 截图自检产物
 _shots/
 
+# 运行时数据（服务端上传记录，由 upload_server.py 自动维护）
+data/
+
 # 系统文件
 Thumbs.db
 .DS_Store

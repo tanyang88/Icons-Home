@@ -1,35 +1,124 @@
 # Icons Home
 
-一个纯静态的个人图标收藏网页：把图标图片放进 `icons/` 目录，在 `data.js` 里加一条记录，即可浏览、点击打开对应应用、复制图标链接，用于 NAS、导航页或其它网页展示。
+个人图标收藏网页：浏览 / 上传图标、点击打开对应应用、一键复制图标链接。
 
-参考 [Siriling/my-icons](https://github.com/Siriling/my-icons) 的交互思路，从零实现为**零依赖、无需构建**的纯静态版本。
+参考 [Siriling/my-icons](https://github.com/Siriling/my-icons) 的交互思路实现，支持**四种用法**：
+
+1. **本地双击直开**：纯静态，无需任何服务
+2. **Python 轻量服务**：本地 / 服务器一行命令启动，上传真正写入文件
+3. **Docker 部署**：`docker compose up -d` 即可
+4. **nginx 反代域名发布**：外网域名 / IP 均可，上传全端生效
 
 ## 特性
 
-- 纯静态：单页 HTML + 一个数据文件，双击 `index.html` 即可本地使用，无需安装 Node、无需服务器
-- 网页上传：页面右上角「上传」按钮弹窗上传——点击选择文件或直接拖拽图片，选择分类后自动刷新，新图标立即出现在网格中
-- 分类自由：分类名称可自定义，支持任意添加 / 删除分类，自动统计每个分类的图标数量
-- 名称自动匹配：图标下方显示的名称默认与文件名一致（自动去掉扩展名），无需手动填写
-- 图标超链接：添加图标时可自定义跳转地址，点击图标在新标签页打开对应应用 / 网站
-- 一键复制：悬停图标，点击卡片右上角的复制按钮，复制该图标的完整 URL 到剪贴板
-- 链接自动匹配：复制的图标链接自动匹配当前部署环境——本地双击、nginx 内网、外网域名都不用改代码
+- **网页上传**：页面右上角「上传」按钮弹窗上传——点击选择文件或直接拖拽，选择分类后自动刷新
+  - 服务模式（http/https 访问）：图片直接写入服务器 `icons/`，记录写入 `data/uploads.json`，**所有访问者都能看到**
+  - 静态模式（file:// 双击打开）：降级为浏览器本地存储，免服务可用
+- **分类自由**：分类名称可自定义，支持任意添加 / 删除分类，自动统计数量；上传时可直接新建分类
+- **名称自动匹配**：图标下方名称默认与文件名一致（自动去掉扩展名）
+- **图标超链接**：`data.js` 中可为图标自定义跳转地址，点击在新标签页打开；无链接则点击复制链接
+- **链接自动匹配**：复制出的图标链接自动跟随当前访问地址——本地、内网 IP、外网域名切换**无需改代码**
+- **零第三方依赖**：后端是单文件 Python 标准库（Python 3.8+，3.13 亦可用），不需要 pip install 任何包
 - 深色主题、响应式布局，手机电脑都能用
 
 ## 目录结构
 
 ```
 Icons-Home/
-├── index.html   # 页面本体（样式和逻辑都在里面，一般不用改）
-├── data.js      # 图标数据配置：分类、图标清单、URL 前缀（日常主要改这个）
-├── icons/       # 图标图片目录：把图片丢进来即可
+├── index.html          # 页面本体（样式 + 逻辑都在里面，一般不用改）
+├── data.js             # 基础图标数据：分类、图标清单、URL 前缀（日常主要改这个）
+├── icons/              # 图标图片目录：示例图标 + 上传的图片都在这里
+├── data/uploads.json   # 上传记录（服务模式自动维护，首次运行自动生成）
+├── upload_server.py    # 上传服务（Python 标准库，零依赖）
+├── Dockerfile          # Docker 镜像定义
+├── docker-compose.yml  # Docker 一键部署（含数据持久化挂载）
 └── README.md
 ```
 
+## 方式一：本地双击直开（纯静态）
+
+直接双击 `index.html` 用浏览器打开即可，不需要启动任何服务。此模式下上传的图标保存在**当前浏览器本地**（仅本机本浏览器可见）。
+
+## 方式二：Python 上传服务（本地 / 服务器）
+
+```bash
+python upload_server.py                  # 监听 0.0.0.0:8000，托管脚本所在目录
+python upload_server.py --port 9000      # 换端口
+python upload_server.py --host 127.0.0.1 # 仅本机访问
+python upload_server.py --dir D:\Icons-Home   # 指定项目目录
+```
+
+启动后访问 `http://localhost:8000`。上传的图片 → `icons/` 目录，记录 → `data/uploads.json`，**所有访问者刷新后都能看到**。
+
+局域网内其它设备访问 `http://<服务器IP>:8000` 即可（需放行防火墙端口）。
+
+## 方式三：Docker 部署
+
+在服务器上先取得项目（`git clone` 或上传压缩包），然后：
+
+```bash
+cd Icons-Home
+docker compose up -d
+```
+
+访问 `http://<服务器IP>:8000`。
+
+- `./icons` 与 `./data` 已挂载到宿主机，**容器重建 / 升级不丢数据**
+- 备份数据 = 打包这两个目录
+- 查看日志：`docker logs -f icons-home`
+
+## 方式四：nginx 反代 + 域名发布（推荐长期使用）
+
+### 场景 A：纯静态发布（不需要上传）
+
+把 `index.html`、`data.js`、`icons/` 整个目录放到 nginx 站点目录，如 `/var/www/icons-home`：
+
+```nginx
+server {
+    listen 80;
+    server_name 你的域名或IP;
+    root /var/www/icons-home;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+```
+
+此方式上传走浏览器本地存储（仅当前浏览器可见）。
+
+### 场景 B：反代上传服务（推荐，上传全端生效）
+
+先按方式二或方式三启动服务（本机 `127.0.0.1:8000`），再配 nginx：
+
+```nginx
+server {
+    listen 80;
+    server_name icons.example.com;   # 域名或服务器 IP
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        client_max_body_size 20m;    # 关键：允许上传大图，否则会 413
+    }
+}
+```
+
+`nginx -t && nginx -s reload` 后，访问 `http://icons.example.com` 即可上传、浏览。配好 HTTPS 证书后访问 `https://icons.example.com`。
+
 ## 如何添加一个图标
 
-只要两步：
+### 方式 A：网页上传（推荐）
 
-1. 把图片文件放进 `icons/` 目录（支持 `svg` / `png` / `jpg` / `webp`，推荐正方形 512×512 左右）
+点右上角「上传」→ 点击或拖拽图片 → 选择分类（可新建）→ 开始上传，自动刷新后即生效。服务模式下图片与记录均已写入服务器。
+
+### 方式 B：手动配置
+
+1. 把图片文件放进 `icons/` 目录（支持 `svg` / `png` / `jpg` / `webp`）
 2. 在 `data.js` 的 `icons` 数组里加一条记录：
 
 ```js
@@ -62,61 +151,27 @@ Icons-Home/
 - 新增一行 = 添加分类
 - 删掉一行（同时把图标里的 `category` 也改掉或删掉）= 删除分类
 
-分类栏会自动按此渲染，并统计每个分类的图标数量。
+分类栏自动按此渲染并统计数量。网页上传时也可直接输入新分类名创建分类。
 
-## 如何在网页上上传图标
+## 图标链接如何自动匹配（域名 / IP 通用）
 
-点击页面右上角「上传」按钮，在弹出的窗口中：
+页面右上角「设置」面板可查看「当前将生成」的链接格式，默认逻辑：
 
-1. **选择文件**：点击拖拽区域（打开文件选择框），或直接把图片文件**拖拽**进窗口（支持多选，png / jpg / webp / svg / gif）
-2. **选择分类**：每个文件一行，下拉选择已有分类；也可以选「新建分类…」输入新分类名
-3. 点击「开始上传」，完成后页面**自动刷新**，新图标立即显示在网格中（名称自动取文件名）
+| 访问方式 | 复制出的图标链接 |
+| --- | --- |
+| 本地双击打开 | `file:///C:/…/Icons-Home/icons/文件名` |
+| 本地服务 | `http://localhost:8000/icons/文件名` |
+| 内网 IP | `http://192.168.1.100:8000/icons/文件名` |
+| 反代域名 | `https://icons.example.com/icons/文件名` |
 
-> 说明：受浏览器安全限制，纯静态页面无法直接改写服务器上的 `data.js` 文件。上传的图标会先保存在**当前浏览器的本地存储**中（本地双击打开时完全够用）；要在 nginx / 外网长期生效，打开「设置」面板，在「本地上传的图标」区域：
->
-> 1. 点「下载图片」把图片保存到项目 `icons/` 目录
-> 2. 点「复制记录」复制 data.js 追加文本，粘贴进 `data.js` 的 `icons` 数组
->
-> 这样换设备、换浏览器、发布到服务器都不会丢。单张图片建议 1MB 以内（本地存储有容量上限）。
+即：**链接永远跟随当前访问地址**，本地、内网、外网切换无需改代码。如需固定使用 CDN 或域名，可在「设置」面板填写 URL 前缀（或写入 `data.js` 的 `baseUrl` 字段）。
 
-## 本地打开
+## 数据与备份
 
-直接双击 `index.html` 用浏览器打开即可，不需要启动任何服务。
-
-## 用 nginx 发布
-
-把 `index.html`、`data.js`、`icons/` 整个目录放到服务器（或本机）nginx 的站点目录即可，例如 `/var/www/icons-home`：
-
-```nginx
-server {
-    listen 80;
-    server_name 你的域名或IP;
-    root /var/www/icons-home;
-    index index.html;
-
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-}
-```
-
-- 本机发布：浏览器访问 `http://localhost` 即可
-- 局域网发布：访问 `http://<服务器IP>`，手机 / 其它设备同网段可访问
-- 外网发布：配置好域名 / 反代 / HTTPS 后访问 `https://<域名>` 即可
-
-**子路径部署也支持**：例如把文件放在 nginx 的 `icons-home` 子目录，访问 `http://<服务器>/icons-home/`，无需改任何代码。
-
-## 图标链接如何自动匹配
-
-页面右上角「设置」面板可查看"当前将生成"的链接格式，默认逻辑：
-
-- **本地双击打开**：复制出的链接形如 `file:///C:/…/Icons-Home/icons/文件名`
-- **nginx 本机 / 局域网**：访问 `http://localhost` 或 `http://192.168.x.x` 时，自动复制对应地址下的链接
-- **外网域名**：访问 `https://域名` 时，自动复制 `https://域名/icons/文件名`
-
-即：**链接永远跟随当前访问地址**，本地、内网、外网切换无需改代码。
-
-如需固定使用某个 CDN 或域名，可在「设置」面板填写 URL 前缀（或写入 `data.js` 的 `baseUrl` 字段）；设置保存在浏览器本地，「恢复默认」即回到自动匹配。
+- `data.js`：手动维护的基础图标清单
+- `icons/`：全部图标图片（示例 + 网页上传的）
+- `data/uploads.json`：网页上传的记录（服务模式自动维护，已加入 `.gitignore`）
+- **备份 = 打包 `icons/` 和 `data/` 两个目录**；恢复时放回原位置即可
 
 ## 部署到 GitHub Pages（可选）
 
@@ -125,6 +180,8 @@ server {
 1. Source 选择 `Deploy from a branch`
 2. Branch 选择 `main`，目录选择 `/ (root)`
 3. 保存后等待一两分钟，访问 `https://<用户名>.github.io/Icons-Home/` 即可
+
+> Pages 为纯静态托管、无后端，上传走浏览器本地存储模式（仅当前浏览器可见）；需要全端上传请用方式二 / 三 / 四。
 
 ## License
 

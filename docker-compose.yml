@@ -1,0 +1,20 @@
+# Icons Home - Docker 部署
+#
+# 用法：在仓库目录执行  docker compose up -d
+# 访问：http://<服务器IP>:8000
+#
+# 数据持久化（重要，容器重建不丢数据）：
+#   ./icons  -> 上传的图标图片
+#   ./data   -> 上传记录 uploads.json
+# 备份数据 = 打包这两个目录。
+
+services:
+  icons-home:
+    build: .
+    container_name: icons-home
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./icons:/app/icons
+      - ./data:/app/data
+    restart: unless-stopped
