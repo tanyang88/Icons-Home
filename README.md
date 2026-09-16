@@ -1,16 +1,17 @@
 # Icons Home
 
-一个纯静态的个人图标收藏网页：把图标图片放进 `icons/` 目录，在 `data.js` 里加一条记录，点击图标即可复制图标链接，用于 NAS、导航页或其它网页展示。
+一个纯静态的个人图标收藏网页：把图标图片放进 `icons/` 目录，在 `data.js` 里加一条记录，即可浏览、点击打开对应应用、复制图标链接，用于 NAS、导航页或其它网页展示。
 
 参考 [Siriling/my-icons](https://github.com/Siriling/my-icons) 的交互思路，从零实现为**零依赖、无需构建**的纯静态版本。
 
 ## 特性
 
 - 纯静态：单页 HTML + 一个数据文件，双击 `index.html` 即可本地使用，无需安装 Node、无需服务器
-- 分类浏览：顶部分类栏按分类筛选，自动统计每个分类的图标数量
-- 搜索：按图标名称和描述实时过滤
-- 一键复制：点击任意图标卡片，复制该图标的完整 URL 到剪贴板
-- URL 前缀设置：页面右上角「设置」面板可填写 CDN 或自定义域名前缀，复制出的链接自动带上该前缀
+- 分类自由：分类名称可自定义，支持任意添加 / 删除分类，自动统计每个分类的图标数量
+- 名称自动匹配：图标下方显示的名称默认与文件名一致（自动去掉扩展名），无需手动填写
+- 图标超链接：添加图标时可自定义跳转地址，点击图标在新标签页打开对应应用 / 网站
+- 一键复制：悬停图标，点击卡片右上角的复制按钮，复制该图标的完整 URL 到剪贴板
+- 链接自动匹配：复制的图标链接自动匹配当前部署环境——本地双击、nginx 内网、外网域名都不用改代码
 - 深色主题、响应式布局，手机电脑都能用
 
 ## 目录结构
@@ -31,19 +32,23 @@ Icons-Home/
 2. 在 `data.js` 的 `icons` 数组里加一条记录：
 
 ```js
-{ "name": "我的应用", "category": "software", "file": "my-app.png", "desc": "可选说明" }
+{ "category": "software", "file": "my-app.png", "link": "https://192.168.1.100:32400" }
 ```
 
-- `name`：图标下方显示的名称
-- `category`：所属分类 id，必须与 `categories` 里的 `id` 一致
-- `file`：`icons/` 目录下的文件名
-- `desc`：可选，鼠标悬停提示，也会参与搜索匹配
+字段说明：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `category` | 是 | 所属分类 id，必须与 `categories` 里的 `id` 一致 |
+| `file` | 是 | `icons/` 目录下的文件名 |
+| `link` | 否 | 点击图标时跳转的网址（新标签页打开）；不填则点击图标改为复制链接 |
+| `name` | 否 | 默认不写：图标下方名称自动取文件名（不含扩展名）；需要不同显示名时才加 |
 
 改完保存，刷新页面即可看到新图标。
 
-## 如何调整分类
+## 如何自定义 / 添加 / 删除分类
 
-修改 `data.js` 里的 `categories` 数组即可：
+编辑 `data.js` 里的 `categories` 数组即可，每一行是一个分类：
 
 ```js
 "categories": [
@@ -52,21 +57,50 @@ Icons-Home/
 ]
 ```
 
-图标的 `category` 字段填写对应的 `id`。分类栏会自动按此渲染。
+- 改 `name` = 改分类名称
+- 新增一行 = 添加分类
+- 删掉一行（同时把图标里的 `category` 也改掉或删掉）= 删除分类
+
+分类栏会自动按此渲染，并统计每个分类的图标数量。
 
 ## 本地打开
 
 直接双击 `index.html` 用浏览器打开即可，不需要启动任何服务。
 
-## 设置图标链接前缀
+## 用 nginx 发布
 
-页面右上角「设置」面板可填写 URL 前缀，例如：
+把 `index.html`、`data.js`、`icons/` 整个目录放到服务器（或本机）nginx 的站点目录即可，例如 `/var/www/icons-home`：
 
-- 留空：复制出「当前页面地址 + icons/文件名」的完整链接
-- 填写 `https://cdn.example.com/`：复制出 `https://cdn.example.com/icons/文件名`
-- 填写 `https://tanyang88.github.io/Icons-Home/`：复制出 Pages 在线地址
+```nginx
+server {
+    listen 80;
+    server_name 你的域名或IP;
+    root /var/www/icons-home;
+    index index.html;
 
-设置保存在浏览器本地（localStorage），换浏览器需要重新设置；「恢复默认」可回到 `data.js` 里 `baseUrl` 的值。
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+```
+
+- 本机发布：浏览器访问 `http://localhost` 即可
+- 局域网发布：访问 `http://<服务器IP>`，手机 / 其它设备同网段可访问
+- 外网发布：配置好域名 / 反代 / HTTPS 后访问 `https://<域名>` 即可
+
+**子路径部署也支持**：例如把文件放在 nginx 的 `icons-home` 子目录，访问 `http://<服务器>/icons-home/`，无需改任何代码。
+
+## 图标链接如何自动匹配
+
+页面右上角「设置」面板可查看"当前将生成"的链接格式，默认逻辑：
+
+- **本地双击打开**：复制出的链接形如 `file:///C:/…/Icons-Home/icons/文件名`
+- **nginx 本机 / 局域网**：访问 `http://localhost` 或 `http://192.168.x.x` 时，自动复制对应地址下的链接
+- **外网域名**：访问 `https://域名` 时，自动复制 `https://域名/icons/文件名`
+
+即：**链接永远跟随当前访问地址**，本地、内网、外网切换无需改代码。
+
+如需固定使用某个 CDN 或域名，可在「设置」面板填写 URL 前缀（或写入 `data.js` 的 `baseUrl` 字段）；设置保存在浏览器本地，「恢复默认」即回到自动匹配。
 
 ## 部署到 GitHub Pages（可选）
 
@@ -75,8 +109,6 @@ Icons-Home/
 1. Source 选择 `Deploy from a branch`
 2. Branch 选择 `main`，目录选择 `/ (root)`
 3. 保存后等待一两分钟，访问 `https://<用户名>.github.io/Icons-Home/` 即可
-
-在线使用时图标链接复制的是 Pages 地址，可以直接用于 NAS、导航页等场景。
 
 ## License
 

@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Icons Home · 个人图标收藏</title>
-<meta name="description" content="个人图标收藏网页：按分类浏览图标，点击即可复制图标链接。">
+<meta name="description" content="个人图标收藏网页：按分类浏览图标，点击打开对应链接，悬停可复制图标链接。">
 <link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="%23161e2e"/><rect x="14" y="14" width="36" height="36" rx="8" fill="%23ffb454"/><rect x="22" y="22" width="9" height="9" rx="2" fill="%23161e2e"/><rect x="34" y="22" width="9" height="9" rx="2" fill="%23161e2e"/><rect x="22" y="34" width="9" height="9" rx="2" fill="%23161e2e"/><rect x="34" y="34" width="9" height="9" rx="2" fill="%23161e2e"/></svg>'>
 <style>
   :root {
@@ -96,6 +96,7 @@
     gap: 14px;
   }
   .card {
+    position: relative;
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -115,11 +116,18 @@
     font-size: 13px; color: var(--text);
     max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .card-url {
-    font-size: 11px; color: var(--muted);
-    font-family: Consolas, "Cascadia Mono", monospace;
-    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  .card-copy {
+    position: absolute; top: 8px; right: 8px;
+    width: 28px; height: 28px; border-radius: 8px;
+    background: var(--surface-2); border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; opacity: 0;
+    transition: opacity .15s, border-color .15s;
   }
+  .card:hover .card-copy, .card:focus-within .card-copy { opacity: 1; }
+  .card-copy:hover { border-color: var(--accent); }
+  .card-copy svg { width: 14px; height: 14px; stroke: var(--muted); }
+  .card-copy:hover svg { stroke: var(--accent); }
 
   .empty {
     grid-column: 1 / -1; text-align: center; padding: 70px 0; color: var(--muted);
@@ -159,6 +167,11 @@
     background: var(--surface); color: var(--text); font-size: 13px;
   }
   .settings-panel .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .preview-line {
+    font-size: 12px; color: var(--muted); line-height: 1.6; margin-bottom: 12px;
+    word-break: break-all;
+  }
+  .preview-line code { color: var(--accent); font-family: Consolas, "Cascadia Mono", monospace; }
 
   /* ===== 提示气泡 ===== */
   .toast {
@@ -207,7 +220,7 @@
         </svg>
         <div>
           <div class="brand-title" id="site-title">Icons Home</div>
-          <div class="brand-sub">个人图标收藏 · 点击图标卡片复制链接</div>
+          <div class="brand-sub">个人图标收藏 · 点击图标打开链接，悬停右上角可复制</div>
         </div>
       </div>
       <div class="toolbar">
@@ -238,14 +251,15 @@
   </main>
 
   <!-- ===== 页脚 ===== -->
-  <footer>共 <b id="total-count">0</b> 个图标 · 点击任意图标卡片即可复制链接到剪贴板</footer>
+  <footer>共 <b id="total-count">0</b> 个图标 · 点击图标打开对应链接，悬停图标右上角可复制链接</footer>
 
   <!-- ===== 设置面板 ===== -->
   <div class="settings-panel" id="settings-panel" role="dialog" aria-label="设置">
     <h3>设置</h3>
-    <p class="tip">图标 URL 前缀。留空时复制「当前页面地址 + icons/文件名」；填写后复制「前缀 + icons/文件名」，可填 CDN 或网站根地址。</p>
-    <label for="base-input">URL 前缀（可留空）</label>
+    <p class="tip">图标 URL 前缀。留空（推荐）时自动匹配当前部署环境：本地双击、nginx 内网、外网域名都会自动生成对应链接；填写后强制使用「前缀 + icons/文件名」。</p>
+    <label for="base-input">URL 前缀（留空 = 自动匹配）</label>
     <input type="text" id="base-input" placeholder="如 https://cdn.example.com/">
+    <div class="preview-line">当前将生成：<code id="base-preview"></code></div>
     <div class="row">
       <button type="button" class="btn" id="base-reset">恢复默认</button>
       <button type="button" class="btn" id="settings-close">关闭</button>
@@ -355,7 +369,7 @@
     var matched = (DATA.icons || []).filter(function (ic) {
       if (state.category !== "all" && ic.category !== state.category) return false;
       if (!kw) return true;
-      var hay = (ic.name + " " + (ic.desc || "")).toLowerCase();
+      var hay = (displayName(ic) + " " + (ic.desc || "")).toLowerCase();
       return hay.indexOf(kw) !== -1;
     });
 
@@ -374,37 +388,60 @@
       var card = el("div", "card");
       card.tabIndex = 0;
       card.setAttribute("role", "button");
-      card.setAttribute("aria-label", "复制 " + ic.name + " 的链接");
-      card.title = ic.desc || (ic.name + "（点击复制链接）");
+      card.setAttribute("aria-label", ic.link ? ("打开 " + displayName(ic) + " 的链接") : ("复制 " + displayName(ic) + " 的图标链接"));
+      card.title = ic.link ? "点击打开：" + ic.link : "未配置跳转链接，点击复制图标链接";
 
       var img = document.createElement("img");
       img.className = "card-icon";
       img.src = "icons/" + ic.file;
-      img.alt = ic.name;
+      img.alt = displayName(ic);
       img.loading = "lazy";
       img.addEventListener("error", function () {
         img.style.opacity = ".25";
       });
 
-      var name = el("span", "card-name", ic.name);
-      var url = el("span", "card-url", iconUrl(ic));
+      var name = el("span", "card-name", displayName(ic));
+
+      var copyBtn = el("button", "card-copy");
+      copyBtn.type = "button";
+      copyBtn.setAttribute("aria-label", "复制 " + displayName(ic) + " 的图标链接");
+      copyBtn.title = "复制图标链接";
+      copyBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
 
       card.appendChild(img);
       card.appendChild(name);
-      card.appendChild(url);
+      card.appendChild(copyBtn);
 
-      card.addEventListener("click", function () {
+      function openLink() {
+        if (ic.link) {
+          var w = window.open(ic.link, "_blank", "noopener,noreferrer");
+          if (!w) showToast("已阻止弹窗，请允许本站打开新窗口");
+        } else {
+          var u = iconUrl(ic);
+          copyText(u, function (ok) {
+            showToast(ok ? "未配置跳转链接，已复制图标链接" : "复制失败", ok ? u : null);
+          });
+        }
+      }
+      card.addEventListener("click", openLink);
+      card.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openLink(); }
+      });
+      copyBtn.addEventListener("click", function (e) {
+        e.stopPropagation();
         var u = iconUrl(ic);
         copyText(u, function (ok) {
-          showToast(ok ? "已复制链接" : "复制失败，请手动选择下方链接", ok ? u : null);
-          if (!ok) { url.textContent = u; }
+          showToast(ok ? "已复制图标链接" : "复制失败，请手动复制", ok ? u : null);
         });
-      });
-      card.addEventListener("keydown", function (e) {
-        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); card.click(); }
       });
       grid.appendChild(card);
     });
+  }
+
+  /* 图标显示名称：优先用 data.js 里自定义的 name，否则取文件名（不含扩展名） */
+  function displayName(ic) {
+    if (ic.name) return ic.name;
+    return (ic.file || "").replace(/\.[^.]+$/, "");
   }
 
   /* ---------- 搜索 ---------- */
@@ -414,8 +451,22 @@
   });
 
   /* ---------- 设置面板 ---------- */
+  function currentBasePreview() {
+    var base = baseInput.value.trim();
+    if (base) {
+      if (base.slice(-1) !== "/") base += "/";
+      return base + "icons/图标文件名";
+    }
+    try { return new URL("icons/图标文件名", location.href).href; }
+    catch (e) { return "icons/图标文件名"; }
+  }
+  function updatePreview() {
+    var p = document.getElementById("base-preview");
+    if (p) p.textContent = currentBasePreview();
+  }
   function openSettings() {
     settingsPanel.classList.add("open");
+    updatePreview();
     baseInput.focus();
     baseInput.select();
   }
@@ -428,10 +479,12 @@
   document.getElementById("base-reset").addEventListener("click", function () {
     baseInput.value = (DATA.baseUrl || "").trim();
     try { localStorage.removeItem(BASE_KEY); } catch (e) {}
-    showToast("已恢复默认 URL 前缀");
+    updatePreview();
+    showToast("已恢复默认（自动匹配当前部署环境）");
   });
   baseInput.addEventListener("input", function () {
     try { localStorage.setItem(BASE_KEY, this.value.trim()); } catch (e) {}
+    updatePreview();
   });
   document.addEventListener("click", function (e) {
     if (settingsPanel.classList.contains("open") &&
