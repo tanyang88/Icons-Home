@@ -191,6 +191,97 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
 
+  /* ===== 上传弹窗 ===== */
+  .modal-mask {
+    position: fixed; inset: 0; z-index: 50;
+    background: rgba(5, 9, 16, .72);
+    display: none; align-items: center; justify-content: center;
+    padding: 20px;
+  }
+  .modal-mask.open { display: flex; }
+  .modal {
+    width: 560px; max-width: 100%; max-height: 86vh;
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 16px; display: flex; flex-direction: column;
+    box-shadow: 0 24px 70px rgba(0,0,0,.5);
+  }
+  .modal-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 15px 20px; border-bottom: 1px solid var(--border);
+  }
+  .modal-head h3 { font-size: 16px; }
+  .modal-close {
+    background: none; border: none; color: var(--muted);
+    font-size: 22px; line-height: 1; cursor: pointer; padding: 2px 6px;
+  }
+  .modal-close:hover { color: var(--text); }
+  .modal-body { padding: 20px; overflow-y: auto; }
+  .dropzone {
+    border: 2px dashed var(--border); border-radius: 12px;
+    padding: 30px 16px; text-align: center; color: var(--muted);
+    cursor: pointer; transition: border-color .15s, background .15s;
+    font-size: 13px; outline: none;
+  }
+  .dropzone:hover, .dropzone:focus-visible, .dropzone.drag {
+    border-color: var(--accent); background: var(--accent-soft); color: var(--text);
+  }
+  .dropzone .dz-main { color: var(--text); margin-bottom: 5px; }
+  .dropzone .dz-main b { color: var(--accent); font-weight: 600; }
+  .file-list { margin-top: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .file-item {
+    display: flex; align-items: center; gap: 12px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 10px 12px;
+  }
+  .file-item img {
+    width: 40px; height: 40px; object-fit: contain; border-radius: 6px;
+    background: var(--bg); flex: none;
+  }
+  .file-item .fi-info { flex: 1; min-width: 0; }
+  .file-item .fi-name { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .file-item .fi-size { font-size: 11px; color: var(--muted); }
+  .file-item select {
+    background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 7px 8px; font-size: 13px; outline: none;
+    max-width: 128px;
+  }
+  .file-item select:focus { border-color: var(--accent); }
+  .fi-newcat {
+    width: 110px; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 7px 8px; font-size: 13px; outline: none;
+  }
+  .fi-newcat:focus { border-color: var(--accent); }
+  .fi-del {
+    background: none; border: none; color: var(--muted);
+    font-size: 18px; line-height: 1; cursor: pointer; padding: 4px 6px;
+  }
+  .fi-del:hover { color: #ff7b72; }
+  .modal-foot {
+    display: flex; justify-content: flex-end; gap: 10px;
+    padding: 14px 20px; border-top: 1px solid var(--border);
+  }
+  .btn-primary, .btn-plain {
+    padding: 9px 18px; border-radius: 10px; font-size: 14px;
+    cursor: pointer; border: 1px solid var(--border);
+  }
+  .btn-primary { background: var(--accent); color: #1a1205; border-color: var(--accent); font-weight: 600; }
+  .btn-primary:hover { filter: brightness(1.08); }
+  .btn-primary:disabled { opacity: .5; cursor: not-allowed; filter: none; }
+  .btn-plain { background: var(--surface); color: var(--text); }
+  .btn-plain:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ===== 上传管理（设置面板内） ===== */
+  .upload-manage { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px; }
+  .upload-manage h4 { font-size: 13px; margin-bottom: 6px; color: var(--text); }
+  .upload-manage .um-tip { font-size: 12px; color: var(--muted); line-height: 1.6; margin-bottom: 10px; }
+  .upload-manage textarea {
+    width: 100%; height: 92px; resize: vertical; margin-bottom: 10px;
+    background: var(--bg); color: var(--muted); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; font-size: 11px; outline: none;
+    font-family: Consolas, "Cascadia Mono", monospace;
+  }
+
   /* ===== 移动端适配 ===== */
   @media (max-width: 640px) {
     .topbar-inner { padding: 12px 14px; }
@@ -201,6 +292,8 @@
     .card { padding: 14px 8px 10px; }
     .card-icon { width: 44px; height: 44px; }
     .settings-panel { top: 120px; right: 14px; }
+    .file-item { flex-wrap: wrap; }
+    .file-item select { max-width: 110px; }
   }
 </style>
 </head>
@@ -231,6 +324,12 @@
           <input type="text" class="search-input" id="search-input"
                  placeholder="搜索图标名称或描述…" aria-label="搜索图标">
         </div>
+        <button type="button" class="icon-btn" id="upload-btn" aria-label="上传图标">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>
+          </svg>
+          上传
+        </button>
         <button type="button" class="icon-btn" id="settings-btn" aria-label="打开设置">
           <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="3"/>
@@ -264,6 +363,38 @@
       <button type="button" class="btn" id="base-reset">恢复默认</button>
       <button type="button" class="btn" id="settings-close">关闭</button>
     </div>
+    <div class="upload-manage">
+      <h4 id="upload-manage-title">本地上传的图标（0 个）</h4>
+      <p class="um-tip">上传的图标保存在当前浏览器本地。发布到 nginx / 外网前，请先「下载图片」放进项目 icons/ 目录，再把下方记录粘贴进 data.js，即可长期生效。</p>
+      <textarea id="export-records" readonly placeholder="还没有上传记录"></textarea>
+      <div class="row">
+        <button type="button" class="btn" id="export-download">下载图片</button>
+        <button type="button" class="btn" id="export-copy">复制记录</button>
+        <button type="button" class="btn" id="upload-clear">清空</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 上传弹窗 ===== -->
+  <div class="modal-mask" id="upload-mask">
+    <div class="modal" role="dialog" aria-label="上传图标">
+      <div class="modal-head">
+        <h3>上传图标</h3>
+        <button type="button" class="modal-close" id="upload-close" aria-label="关闭">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="选择文件或拖拽图片到此处">
+          <div class="dz-main">点击选择文件，或把图片<b>拖拽到这里</b></div>
+          <div>支持 png / jpg / webp / svg / gif，可一次多选</div>
+        </div>
+        <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp,image/svg+xml,image/gif" multiple hidden>
+        <div class="file-list" id="file-list"></div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn-plain" id="upload-cancel">取消</button>
+        <button type="button" class="btn-primary" id="upload-submit" disabled>开始上传</button>
+      </div>
+    </div>
   </div>
 
   <!-- ===== 提示气泡 ===== -->
@@ -279,6 +410,7 @@
   var DATA = window.ICON_DATA || { title: "Icons Home", categories: [], icons: [] };
   var state = { category: "all", keyword: "" };
   var BASE_KEY = "icons-home-baseurl";
+  var UPLOADS_KEY = "icons-home-uploads";
 
   var grid = document.getElementById("grid");
   var categoriesNav = document.getElementById("categories");
@@ -287,6 +419,13 @@
   var settingsPanel = document.getElementById("settings-panel");
   var toast = document.getElementById("toast");
   var toastTimer = null;
+
+  var uploadMask = document.getElementById("upload-mask");
+  var fileInput = document.getElementById("file-input");
+  var dropzone = document.getElementById("dropzone");
+  var fileList = document.getElementById("file-list");
+  var uploadSubmit = document.getElementById("upload-submit");
+  var uploadQueue = [];
 
   /* ---------- 工具函数 ---------- */
   function el(tag, cls, text) {
@@ -305,6 +444,31 @@
     }
     try { return new URL(path, location.href).href; }
     catch (e) { return path; }
+  }
+
+  /* ---------- 本地上传的图标数据 ---------- */
+  function loadUploads() {
+    try {
+      var raw = localStorage.getItem(UPLOADS_KEY);
+      var arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr : [];
+    } catch (e) { return []; }
+  }
+  function saveUploads(list) {
+    localStorage.setItem(UPLOADS_KEY, JSON.stringify(list));
+  }
+  /* 页面显示的全部图标 = data.js 配置图标 + 本地上传图标（_src 为图片 DataURL） */
+  function allIcons() {
+    var configured = (DATA.icons || []).map(function (ic) {
+      return { name: ic.name, category: ic.category, file: ic.file, link: ic.link, desc: ic.desc, _src: "" };
+    });
+    var uploaded = loadUploads().map(function (u) {
+      return { name: u.name, category: u.category, file: u.name, link: "", desc: "本地上传", _src: u.dataUrl };
+    });
+    return configured.concat(uploaded);
+  }
+  function iconSrc(ic) {
+    return ic._src ? ic._src : "icons/" + ic.file;
   }
 
   function copyText(text, done) {
@@ -342,9 +506,25 @@
   /* ---------- 渲染 ---------- */
   function renderCategories() {
     categoriesNav.textContent = "";
-    var list = [{ id: "all", name: "全部" }].concat(DATA.categories || []);
+    var catOrder = [];
+    var catNames = {};
+    (DATA.categories || []).forEach(function (c) {
+      catOrder.push(c.id);
+      catNames[c.id] = c.name;
+    });
+    var all = allIcons();
+    /* 本地上传图标使用了 data.js 里没有的新分类时，自动追加到分类栏 */
+    all.forEach(function (ic) {
+      if (!(ic.category in catNames)) {
+        catOrder.push(ic.category);
+        catNames[ic.category] = ic.category;
+      }
+    });
+    var list = [{ id: "all", name: "全部" }].concat(catOrder.map(function (id) {
+      return { id: id, name: catNames[id] };
+    }));
     var counts = {};
-    (DATA.icons || []).forEach(function (ic) {
+    all.forEach(function (ic) {
       counts[ic.category] = (counts[ic.category] || 0) + 1;
       counts.all = (counts.all || 0) + 1;
     });
@@ -365,15 +545,16 @@
 
   function renderGrid() {
     grid.textContent = "";
+    var all = allIcons();
     var kw = state.keyword.toLowerCase();
-    var matched = (DATA.icons || []).filter(function (ic) {
+    var matched = all.filter(function (ic) {
       if (state.category !== "all" && ic.category !== state.category) return false;
       if (!kw) return true;
       var hay = (displayName(ic) + " " + (ic.desc || "")).toLowerCase();
       return hay.indexOf(kw) !== -1;
     });
 
-    document.getElementById("total-count").textContent = (DATA.icons || []).length;
+    document.getElementById("total-count").textContent = all.length;
 
     if (!matched.length) {
       var empty = el("div", "empty");
@@ -389,11 +570,11 @@
       card.tabIndex = 0;
       card.setAttribute("role", "button");
       card.setAttribute("aria-label", ic.link ? ("打开 " + displayName(ic) + " 的链接") : ("复制 " + displayName(ic) + " 的图标链接"));
-      card.title = ic.link ? "点击打开：" + ic.link : "未配置跳转链接，点击复制图标链接";
+      card.title = ic._src ? "本地上传的图标（尚未部署到项目目录）" : (ic.link ? "点击打开：" + ic.link : "未配置跳转链接，点击复制图标链接");
 
       var img = document.createElement("img");
       img.className = "card-icon";
-      img.src = "icons/" + ic.file;
+      img.src = iconSrc(ic);
       img.alt = displayName(ic);
       img.loading = "lazy";
       img.addEventListener("error", function () {
@@ -413,7 +594,9 @@
       card.appendChild(copyBtn);
 
       function openLink() {
-        if (ic.link) {
+        if (ic._src) {
+          showToast("本地上传的图标尚未部署：请在设置中下载图片并放入项目 icons/ 目录");
+        } else if (ic.link) {
           var w = window.open(ic.link, "_blank", "noopener,noreferrer");
           if (!w) showToast("已阻止弹窗，请允许本站打开新窗口");
         } else {
@@ -429,6 +612,10 @@
       });
       copyBtn.addEventListener("click", function (e) {
         e.stopPropagation();
+        if (ic._src) {
+          showToast("本地上传的图标尚未部署：请在设置中下载图片并放入项目 icons/ 目录");
+          return;
+        }
         var u = iconUrl(ic);
         copyText(u, function (ok) {
           showToast(ok ? "已复制图标链接" : "复制失败，请手动复制", ok ? u : null);
@@ -467,6 +654,7 @@
   function openSettings() {
     settingsPanel.classList.add("open");
     updatePreview();
+    renderUploadManage();
     baseInput.focus();
     baseInput.select();
   }
@@ -494,7 +682,210 @@
     }
   });
   document.addEventListener("keydown", function (e) {
-    if (e.key === "Escape") settingsPanel.classList.remove("open");
+    if (e.key === "Escape") { settingsPanel.classList.remove("open"); closeUpload(); }
+  });
+
+  /* ============================================================
+   * 上传弹窗：点击 / 拖拽选择图片 → 选择分类 → 保存到本地并刷新
+   * ============================================================ */
+  function openUpload() {
+    uploadMask.classList.add("open");
+    document.body.style.overflow = "hidden";
+  }
+  function closeUpload() {
+    uploadMask.classList.remove("open");
+    document.body.style.overflow = "";
+  }
+  document.getElementById("upload-btn").addEventListener("click", openUpload);
+  document.getElementById("upload-close").addEventListener("click", closeUpload);
+  document.getElementById("upload-cancel").addEventListener("click", closeUpload);
+  uploadMask.addEventListener("click", function (e) {
+    if (e.target === uploadMask) closeUpload();
+  });
+
+  dropzone.addEventListener("click", function () { fileInput.click(); });
+  dropzone.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); }
+  });
+  dropzone.addEventListener("dragover", function (e) {
+    e.preventDefault();
+    dropzone.classList.add("drag");
+  });
+  dropzone.addEventListener("dragleave", function () {
+    dropzone.classList.remove("drag");
+  });
+  dropzone.addEventListener("drop", function (e) {
+    e.preventDefault();
+    dropzone.classList.remove("drag");
+    addUploadFiles(e.dataTransfer.files);
+  });
+  fileInput.addEventListener("change", function () {
+    addUploadFiles(this.files);
+    this.value = "";
+  });
+
+  function addUploadFiles(list) {
+    var added = 0;
+    Array.prototype.forEach.call(list, function (f) {
+      if (!/^image\//.test(f.type)) {
+        showToast("已跳过非图片文件：" + f.name);
+        return;
+      }
+      uploadQueue.push({ file: f, name: f.name, category: "", size: f.size });
+      added++;
+    });
+    if (added) {
+      renderUploadList();
+      if (!uploadMask.classList.contains("open")) openUpload();
+    }
+  }
+
+  function renderUploadList() {
+    fileList.textContent = "";
+    uploadQueue.forEach(function (item, idx) {
+      var row = el("div", "file-item");
+
+      var img = document.createElement("img");
+      img.src = URL.createObjectURL(item.file);
+      img.alt = item.name;
+
+      var info = el("div", "fi-info");
+      info.appendChild(el("div", "fi-name", item.name));
+      info.appendChild(el("div", "fi-size", (item.size / 1024).toFixed(1) + " KB"));
+
+      var sel = document.createElement("select");
+      sel.setAttribute("aria-label", "选择分类：" + item.name);
+      (DATA.categories || []).forEach(function (c) {
+        var o = document.createElement("option");
+        o.value = c.id;
+        o.textContent = c.name;
+        if (item.category === c.id) o.selected = true;
+        sel.appendChild(o);
+      });
+      var newOpt = document.createElement("option");
+      newOpt.value = "__new__";
+      newOpt.textContent = "新建分类…";
+      sel.appendChild(newOpt);
+      sel.addEventListener("change", function () {
+        if (sel.value === "__new__") {
+          if (!item.newCatInput) showNewCatInput(row, item, sel);
+        } else {
+          item.category = sel.value;
+          item.newCatName = "";
+          if (item.newCatInput) { item.newCatInput.remove(); item.newCatInput = null; }
+        }
+      });
+
+      var del = el("button", "fi-del", "×");
+      del.type = "button";
+      del.title = "移除";
+      del.setAttribute("aria-label", "移除 " + item.name);
+      del.addEventListener("click", function () {
+        uploadQueue.splice(idx, 1);
+        renderUploadList();
+      });
+
+      row.appendChild(img);
+      row.appendChild(info);
+      row.appendChild(sel);
+      row.appendChild(del);
+      fileList.appendChild(row);
+    });
+    uploadSubmit.disabled = uploadQueue.length === 0;
+    uploadSubmit.textContent = uploadQueue.length ? "开始上传（" + uploadQueue.length + "）" : "开始上传";
+  }
+
+  function showNewCatInput(row, item, sel) {
+    var input = document.createElement("input");
+    input.type = "text";
+    input.className = "fi-newcat";
+    input.placeholder = "新分类名";
+    input.setAttribute("aria-label", "新分类名");
+    input.addEventListener("input", function () { item.newCatName = this.value.trim(); });
+    row.insertBefore(input, sel.nextSibling);
+    item.newCatInput = input;
+    input.focus();
+  }
+
+  uploadSubmit.addEventListener("click", function () {
+    if (!uploadQueue.length) return;
+    var list = loadUploads();
+    var idx = 0;
+    var failed = false;
+    function next() {
+      if (failed) return;
+      if (idx >= uploadQueue.length) {
+        try {
+          saveUploads(list);
+        } catch (e) {
+          failed = true;
+          showToast("保存失败：图片可能过大（单张建议 1MB 内），请压缩后重试");
+          closeUpload();
+          return;
+        }
+        showToast("已上传 " + uploadQueue.length + " 个图标，正在刷新…");
+        setTimeout(function () { location.reload(); }, 600);
+        return;
+      }
+      var item = uploadQueue[idx++];
+      var category = item.newCatName || item.category;
+      var reader = new FileReader();
+      reader.onload = function (e) {
+        /* 同名文件覆盖旧记录 */
+        list = list.filter(function (u) { return u.name !== item.name; });
+        list.push({ name: item.name, category: category, dataUrl: e.target.result });
+        next();
+      };
+      reader.onerror = function () {
+        failed = true;
+        showToast("读取文件失败：" + item.name);
+        closeUpload();
+      };
+      reader.readAsDataURL(item.file);
+    }
+    next();
+  });
+
+  /* ============================================================
+   * 上传管理（设置面板内）：导出图片 / 复制 data.js 追加记录 / 清空
+   * ============================================================ */
+  function exportRecordsText(up) {
+    if (!up.length) return "";
+    var lines = up.map(function (u) {
+      return "    { \"category\": \"" + u.category + "\", \"file\": \"" + u.name + "\" },";
+    });
+    return "// 图片请先放入项目 icons/ 目录，再把以下记录追加到 data.js 的 icons 数组：\n" + lines.join("\n");
+  }
+  function renderUploadManage() {
+    var up = loadUploads();
+    document.getElementById("upload-manage-title").textContent = "本地上传的图标（" + up.length + " 个）";
+    document.getElementById("export-records").value = exportRecordsText(up);
+  }
+  document.getElementById("export-download").addEventListener("click", function () {
+    var up = loadUploads();
+    if (!up.length) { showToast("没有可导出的图片"); return; }
+    up.forEach(function (u) {
+      var a = document.createElement("a");
+      a.href = u.dataUrl;
+      a.download = u.name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    });
+    showToast("已开始下载 " + up.length + " 张图片，请放入项目 icons/ 目录");
+  });
+  document.getElementById("export-copy").addEventListener("click", function () {
+    var t = document.getElementById("export-records").value;
+    if (!t) { showToast("暂无上传记录"); return; }
+    copyText(t, function (ok) { showToast(ok ? "已复制 data.js 追加记录" : "复制失败，请手动复制"); });
+  });
+  document.getElementById("upload-clear").addEventListener("click", function () {
+    var up = loadUploads();
+    if (!up.length) { showToast("没有本地上传数据"); return; }
+    if (!window.confirm("确定清空 " + up.length + " 个本地上传的图标？")) return;
+    try { localStorage.removeItem(UPLOADS_KEY); } catch (e) {}
+    showToast("已清空，正在刷新…");
+    setTimeout(function () { location.reload(); }, 500);
   });
 
   /* ---------- 初始化 ---------- */
