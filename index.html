@@ -637,3 +637,1329 @@
     </div>
   </div>
   <button type="button" class="manage-delete" id="manage-delete-btn" style="display:none;" disabled>删除选中（0）</button>
+
+  <script src="data.js"></script>
+  <script>
+  /* ============================================================
+   * Icons Home - 页面逻辑（一般无需修改）
+   * 数据在 data.js 中维护：改分类、加图标都在那里操作。
+   * ============================================================ */
+  (function () {
+    var DATA = window.ICON_DATA || { title: "Icons Home", categories: [], icons: [] };
+    var state = { category: "all", keyword: "", sortBy: "name", sortOrder: "asc", manage: false, selected: {} };
+    var BASE_KEY = "icons-home-baseurl";
+    var UPLOADS_KEY = "icons-home-uploads";
+    var CATS_KEY = "icons-home-categories";
+    var THEME_KEY = "icons-home-theme";
+    var TITLE_KEY = "icons-home-title";
+    var HIDDEN_CATS_KEY = "icons-home-hidden-cats";
+    var HIDDEN_ICONS_KEY = "icons-home-hidden-icons";
+    var AUTH_KEY = "icons-home-auth";
+    var PASSWD_KEY = "icons-home-passwd";
+    var MOVES_KEY = "icons-home-icon-moves";
+    var FAVICON_KEY = "icons-home-favicon";
+
+    var grid = document.getElementById("grid");
+    var categoriesNav = document.getElementById("categories");
+    var searchInput = document.getElementById("search-input");
+    var baseInput = document.getElementById("base-input");
+    var settingsPanel = document.getElementById("settings-panel");
+    var toast = document.getElementById("toast");
+    var toastTimer = null;
+
+    var uploadMask = document.getElementById("upload-mask");
+    var fileInput = document.getElementById("file-input");
+    var dropzone = document.getElementById("dropzone");
+    var fileList = document.getElementById("file-list");
+    var uploadSubmit = document.getElementById("upload-submit");
+    var uploadQueue = [];
+
+    /* 整理模式 DOM */
+    var manageDock = document.getElementById("manage-dock");
+    var manageTools = document.getElementById("manage-tools");
+    var manageBtn = document.getElementById("manage-btn");
+    var manageMoveCat = document.getElementById("manage-move-cat");
+    var manageMoveBtn = document.getElementById("manage-move-btn");
+    var manageCount = document.getElementById("manage-count");
+    var manageDeleteBtn = document.getElementById("manage-delete-btn");
+    /* 登录弹窗 DOM */
+    var loginMask = document.getElementById("login-mask");
+    var loginUsername = document.getElementById("login-username");
+    var loginPassword = document.getElementById("login-password");
+
+    /* 服务模式：通过 upload_server.py / Docker / nginx 反代访问时为 true；
+       双击本地 HTML（file://）打开时为 false，退回浏览器本地存储方案 */
+    var SERVER_MODE = location.protocol === "http:" || location.protocol === "https:";
+    var serverUploads = [];
+    /* 网页端自定义分类：服务模式存服务器 data/categories.json，静态模式存浏览器本地 */
+    var customCategories = [];
+    /* 站点设置（服务模式从服务器 data/settings.json 读取；静态模式存浏览器本地） */
+    var settings = { title: "", deleted_categories: [], deleted_icons: [], icon_moves: {}, favicon: "" };
+    var hiddenCats = [];
+    var hiddenIcons = [];
+    var iconMoves = {};
+    /* 管理员登录状态：服务模式 {token, username}；静态模式 {username, logged} */
+    var auth = null;
+    var DEFAULT_FAVICON = document.getElementById("site-favicon").href;
+
+    /* ---------- 外观主题（日间 / 夜间 / 跟随系统） ---------- */
+    var savedTheme = "auto";
+    try { savedTheme = localStorage.getItem(THEME_KEY) || "auto"; } catch (e) {}
+    function effectiveTheme() {
+      if (savedTheme === "light" || savedTheme === "dark") return savedTheme;
+      var sysLight = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches;
+      return sysLight ? "light" : "dark";
+    }
+    function applyTheme() {
+      document.documentElement.setAttribute("data-theme", effectiveTheme());
+    }
+    applyTheme();
+    if (window.matchMedia) {
+      var sysMq = window.matchMedia("(prefers-color-scheme: light)");
+      var onSysTheme = function () { if (savedTheme === "auto") applyTheme(); };
+      if (sysMq.addEventListener) sysMq.addEventListener("change", onSysTheme);
+      else if (sysMq.addListener) sysMq.addListener(onSysTheme);
+    }
+
+    /* ---------- 网站图标（favicon）应用 ---------- */
+    function applyFavicon(u) {
+      var link = document.getElementById("site-favicon");
+      if (!link) return;
+      link.href = (u && u.trim()) ? u.trim() : DEFAULT_FAVICON;
+    }
+
+    /* ---------- 管理员登录（未登录仅可浏览与复制链接，登录后全部操作） ---------- */
+    function loadAuth() {
+      try { auth = JSON.parse(localStorage.getItem(AUTH_KEY) || "null"); } catch (e) { auth = null; }
+      return auth;
+    }
+    function saveAuth(a) {
+      auth = a;
+      try { localStorage.setItem(AUTH_KEY, JSON.stringify(a)); } catch (e) {}
+    }
+    function isAdmin() {
+      loadAuth();
+      return !!(auth && (SERVER_MODE ? auth.token : auth.logged));
+    }
+    function doLogout() {
+      auth = null;
+      try { localStorage.removeItem(AUTH_KEY); } catch (e) {}
+      state.manage = false;
+      state.selected = {};
+      renderAuthUI();
+      renderCategories();
+      renderGrid();
+      showToast("已退出登录");
+    }
+    /* 未登录隐藏管理入口（上传 / 设置 / 整理），登录后全部显示 */
+    function renderAuthUI() {
+      var admin = isAdmin();
+      document.getElementById("upload-btn").style.display = admin ? "" : "none";
+      document.getElementById("settings-btn").style.display = admin ? "" : "none";
+      manageDock.style.display = admin ? "" : "none";
+      document.getElementById("login-btn-text").textContent = admin ? ("退出 " + (auth ? auth.username : "admin")) : "登录";
+      if (!admin && state.manage) {
+        state.manage = false;
+        state.selected = {};
+        renderManageBar();
+      }
+    }
+    /* 带鉴权的 API 请求封装：写接口自动带 X-Auth-Token，返回 401 时自动登出 */
+    function api(url, method, body, isJson) {
+      var opts = { method: method || "GET", headers: {} };
+      if (isJson) opts.headers["Content-Type"] = "application/json";
+      var a = loadAuth();
+      if (SERVER_MODE && a && a.token) opts.headers["X-Auth-Token"] = a.token;
+      if (body !== undefined) opts.body = body;
+      return fetch(url, opts).then(function (r) {
+        return r.json().then(function (res) {
+          if (r.status === 401 && res && res.code === "auth") {
+            auth = null;
+            try { localStorage.removeItem(AUTH_KEY); } catch (e) {}
+            renderAuthUI();
+            showToast("登录已过期，请重新登录");
+          }
+          return res;
+        });
+      });
+    }
+
+    /* ---------- 登录弹窗 ---------- */
+    function openLogin() {
+      if (isAdmin()) { doLogout(); return; }
+      loginUsername.value = "";
+      loginPassword.value = "";
+      loginMask.classList.add("open");
+      document.body.style.overflow = "hidden";
+      setTimeout(function () { loginUsername.focus(); }, 50);
+    }
+    function closeLogin() {
+      loginMask.classList.remove("open");
+      document.body.style.overflow = "";
+    }
+    document.getElementById("login-btn").addEventListener("click", openLogin);
+    document.getElementById("login-close").addEventListener("click", closeLogin);
+    document.getElementById("login-cancel").addEventListener("click", closeLogin);
+    loginMask.addEventListener("click", function (e) { if (e.target === loginMask) closeLogin(); });
+
+    function submitLogin() {
+      var u = loginUsername.value.trim();
+      var p = loginPassword.value;
+      if (!u || !p) { showToast("请输入用户名和密码"); return; }
+      if (SERVER_MODE) {
+        api("api/login", "POST", JSON.stringify({ username: u, password: p }), true).then(function (res) {
+          if (res && res.ok) {
+            saveAuth({ token: res.token, username: res.username });
+            closeLogin();
+            renderAuthUI();
+            showToast("登录成功");
+          } else {
+            showToast("登录失败：" + ((res && res.error) || "用户名或密码错误"));
+          }
+        });
+      } else {
+        var stored = "password";
+        try { stored = localStorage.getItem(PASSWD_KEY) || "password"; } catch (e) {}
+        if (p === stored) {
+          saveAuth({ username: u, logged: true });
+          closeLogin();
+          renderAuthUI();
+          showToast("登录成功");
+        } else {
+          showToast("用户名或密码错误");
+        }
+      }
+    }
+    document.getElementById("login-submit").addEventListener("click", submitLogin);
+    document.getElementById("login-password").addEventListener("keydown", function (e) {
+      if (e.key === "Enter") submitLogin();
+    });
+
+    /* ---------- 工具函数 ---------- */
+    function el(tag, cls, text) {
+      var node = document.createElement(tag);
+      if (cls) node.className = cls;
+      if (text != null) node.textContent = text;
+      return node;
+    }
+
+    function iconUrl(icon) {
+      var base = baseInput.value.trim();
+      var path = "icons/" + icon.file;
+      if (base) {
+        if (base.slice(-1) !== "/") base += "/";
+        return base + path;
+      }
+      try { return new URL(path, location.href).href; }
+      catch (e) { return path; }
+    }
+
+    /* ---------- 本地上传的图标数据 ---------- */
+    function loadUploads() {
+      try {
+        var raw = localStorage.getItem(UPLOADS_KEY);
+        var arr = raw ? JSON.parse(raw) : [];
+        return Array.isArray(arr) ? arr : [];
+      } catch (e) { return []; }
+    }
+    function saveUploads(list) {
+      localStorage.setItem(UPLOADS_KEY, JSON.stringify(list));
+    }
+    function loadCustomCats() {
+      try {
+        var raw = localStorage.getItem(CATS_KEY);
+        var arr = raw ? JSON.parse(raw) : [];
+        return Array.isArray(arr) ? arr : [];
+      } catch (e) { return []; }
+    }
+    function saveCustomCats(list) {
+      localStorage.setItem(CATS_KEY, JSON.stringify(list));
+    }
+    /* 保存「隐藏分类 / 隐藏图标 / 移动记录 / 站点外观」：服务模式写服务器 settings.json，静态模式存浏览器本地 */
+    function saveSettings(patch) {
+      if (SERVER_MODE) {
+        return api("api/settings", "POST", JSON.stringify(patch), true).then(function (res) {
+          if (res && res.ok) {
+            settings = res.settings || settings;
+            return true;
+          }
+          showToast("保存失败：" + ((res && res.error) || "未知错误"));
+          return false;
+        });
+      }
+      try {
+        if ("title" in patch) localStorage.setItem(TITLE_KEY, patch.title);
+        if ("favicon" in patch) localStorage.setItem(FAVICON_KEY, patch.favicon);
+        if ("deleted_categories" in patch) localStorage.setItem(HIDDEN_CATS_KEY, JSON.stringify(patch.deleted_categories));
+        if ("deleted_icons" in patch) localStorage.setItem(HIDDEN_ICONS_KEY, JSON.stringify(patch.deleted_icons));
+        if ("icon_moves" in patch) localStorage.setItem(MOVES_KEY, JSON.stringify(patch.icon_moves));
+      } catch (e) {}
+      return Promise.resolve(true);
+    }
+    /* 按当前模式加载隐藏 / 移动列表（服务模式从 settings 读，静态模式从 localStorage 读） */
+    function loadHidden() {
+      if (SERVER_MODE) {
+        hiddenCats = settings.deleted_categories || [];
+        hiddenIcons = settings.deleted_icons || [];
+        iconMoves = settings.icon_moves || {};
+      } else {
+        try { hiddenCats = JSON.parse(localStorage.getItem(HIDDEN_CATS_KEY) || "[]"); } catch (e) { hiddenCats = []; }
+        try { hiddenIcons = JSON.parse(localStorage.getItem(HIDDEN_ICONS_KEY) || "[]"); } catch (e) { hiddenIcons = []; }
+        try { iconMoves = JSON.parse(localStorage.getItem(MOVES_KEY) || "{}"); } catch (e) { iconMoves = {}; }
+      }
+    }
+    /* 页面显示的全部图标 = data.js 配置图标 + 上传的图标
+       基础分类被隐藏时其图标归入「其他」；基础图标被隐藏时不再显示 */
+    function allIcons() {
+      var configured = (DATA.icons || []).map(function (ic, idx) {
+        if (hiddenIcons.indexOf(ic.file) !== -1) return null;
+        var cat = hiddenCats.indexOf(ic.category) !== -1 ? "other" : ic.category;
+        if (iconMoves[ic.file]) cat = iconMoves[ic.file];
+        return { name: ic.name, category: cat, file: ic.file, link: ic.link, desc: ic.desc, _src: "", _uploaded: false, _base: true, added_at: ic.added_at || idx };
+      }).filter(Boolean);
+      var uploaded;
+      if (SERVER_MODE) {
+        /* 服务模式：上传的图片已写入服务器 icons/ 目录，直接按文件名渲染 */
+        uploaded = serverUploads.map(function (u) {
+          var cat = hiddenCats.indexOf(u.category) !== -1 ? "other" : u.category;
+          if (iconMoves[u.name]) cat = iconMoves[u.name];
+          return { name: u.name, category: cat, file: u.name, link: u.link || "", desc: "网页上传", _src: "", _uploaded: true, added_at: u.added_at || 0 };
+        });
+      } else {
+        /* 静态模式（file:// 双击打开）：图片以 DataURL 存在浏览器本地 */
+        uploaded = loadUploads().map(function (u) {
+          var cat = hiddenCats.indexOf(u.category) !== -1 ? "other" : u.category;
+          if (iconMoves[u.name]) cat = iconMoves[u.name];
+          return { name: u.name, category: cat, file: u.name, link: u.link || "", desc: "本地上传", _src: u.dataUrl, _uploaded: true, added_at: u.added_at || 0 };
+        });
+      }
+      return configured.concat(uploaded);
+    }
+    function iconSrc(ic) {
+      return ic._src ? ic._src : "icons/" + ic.file;
+    }
+
+    function copyText(text, done) {
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(fallbackCopy(text)); });
+      } else {
+        done(fallbackCopy(text));
+      }
+    }
+    function fallbackCopy(text) {
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.focus(); ta.select();
+      var ok = false;
+      try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+      document.body.removeChild(ta);
+      return ok;
+    }
+
+    function showToast(msg, url) {
+      toast.textContent = "";
+      toast.appendChild(document.createTextNode(msg));
+      if (url) {
+        var u = el("span", "toast-url", url);
+        toast.appendChild(u);
+      }
+      toast.classList.add("show");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(function () { toast.classList.remove("show"); }, 2400);
+    }
+
+    /* ---------- 渲染 ---------- */
+    function renderCategories() {
+      categoriesNav.textContent = "";
+      var catOrder = [];
+      var catNames = {};
+      (DATA.categories || []).forEach(function (c) {
+        if (hiddenCats.indexOf(c.id) !== -1) return;
+        catOrder.push(c.id);
+        catNames[c.id] = c.name;
+      });
+      /* 网页端自定义分类（服务端 data/categories.json 或浏览器本地） */
+      customCategories.forEach(function (c) {
+        if (hiddenCats.indexOf(c.name) !== -1) return;
+        if (!(c.name in catNames)) {
+          catOrder.push(c.name);
+          catNames[c.name] = c.name;
+        }
+      });
+      var all = allIcons();
+      /* 上传图标使用了上述分类里都没有的新分类时，自动追加到分类栏 */
+      all.forEach(function (ic) {
+        if (!(ic.category in catNames)) {
+          catOrder.push(ic.category);
+          catNames[ic.category] = ic.category;
+        }
+      });
+      var list = [{ id: "all", name: "全部" }].concat(catOrder.map(function (id) {
+        return { id: id, name: catNames[id] };
+      }));
+      var counts = {};
+      all.forEach(function (ic) {
+        counts[ic.category] = (counts[ic.category] || 0) + 1;
+        counts.all = (counts.all || 0) + 1;
+      });
+      list.forEach(function (cat) {
+        var btn = el("button", "pill" + (state.category === cat.id ? " active" : ""), cat.name);
+        var n = counts[cat.id] || 0;
+        if (n) btn.appendChild(el("span", "count", "(" + n + ")"));
+        btn.type = "button";
+        btn.setAttribute("aria-pressed", state.category === cat.id ? "true" : "false");
+        btn.addEventListener("click", function () {
+          state.category = cat.id;
+          state.selected = {};
+          renderCategories();
+          renderGrid();
+          updateManageBar();
+        });
+        categoriesNav.appendChild(btn);
+      });
+    }
+
+    function renderGrid() {
+      grid.textContent = "";
+      var all = allIcons();
+      var kw = state.keyword.toLowerCase();
+      var matched = all.filter(function (ic) {
+        if (state.category !== "all" && ic.category !== state.category) return false;
+        if (!kw) return true;
+        var hay = (displayName(ic) + " " + (ic.desc || "")).toLowerCase();
+        return hay.indexOf(kw) !== -1;
+      });
+
+      /* 页脚计数：全部时显示总数，切换分类时显示该分类图标数 */
+      var shownCount = state.category === "all" ? all.length : countInCategory(state.category);
+      document.getElementById("total-count").textContent = shownCount;
+
+      /* 排序：按名称（中英文 localeCompare）或按添加时间，支持升序 / 降序 */
+      sortIcons(matched);
+
+      if (!matched.length) {
+        var empty = el("div", "empty");
+        empty.appendChild(document.createTextNode("没有找到"));
+        if (kw) empty.appendChild(el("span", "empty-key", "「" + state.keyword + "」"));
+        empty.appendChild(document.createTextNode("对应的图标，试试其它关键词或分类。"));
+        grid.appendChild(empty);
+        return;
+      }
+
+      matched.forEach(function (ic) {
+        var manageSel = state.manage && !!state.selected[ic.file];
+        var card = el("div", "card" + (manageSel ? " selected" : ""));
+        card.tabIndex = 0;
+        card.setAttribute("role", "button");
+        card.setAttribute("aria-label", state.manage ? (manageSel ? "取消选中 " + displayName(ic) : "选中 " + displayName(ic)) : (ic.link ? ("打开 " + displayName(ic) + " 的链接") : ("复制 " + displayName(ic) + " 的图标链接")));
+        card.title = state.manage ? (manageSel ? "点击取消选中" : "点击选中（可多选）") : (ic._src ? "本地上传的图标（尚未部署到项目目录）" : (ic.link ? "点击打开：" + ic.link : "未配置跳转链接，点击复制图标链接"));
+
+        var img = document.createElement("img");
+        img.className = "card-icon";
+        img.src = iconSrc(ic);
+        img.alt = displayName(ic);
+        img.loading = "lazy";
+        img.addEventListener("error", function () {
+          img.style.opacity = ".25";
+        });
+
+        var name = el("span", "card-name", displayName(ic));
+
+        card.appendChild(img);
+        card.appendChild(name);
+
+        if (state.manage) {
+          /* 整理模式：点击卡片 = 选中 / 取消选中（可单选可多选） */
+          var badge = el("span", "sel-badge");
+          badge.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+          card.appendChild(badge);
+          card.addEventListener("click", function () { toggleSelect(ic.file); });
+          card.addEventListener("keydown", function (e) {
+            if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleSelect(ic.file); }
+          });
+        } else {
+          var copyBtn = el("button", "card-copy");
+          copyBtn.type = "button";
+          copyBtn.setAttribute("aria-label", "复制 " + displayName(ic) + " 的图标链接");
+          copyBtn.title = "复制图标链接";
+          copyBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
+          card.appendChild(copyBtn);
+
+          /* 删除按钮（仅管理员可见）：上传图标真删（服务模式删服务器文件+记录），data.js 基础图标隐藏 */
+          if (isAdmin()) {
+            var delBtn = el("button", "card-del");
+            delBtn.type = "button";
+            delBtn.setAttribute("aria-label", "删除 " + displayName(ic));
+            delBtn.title = "删除该图标";
+            delBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>';
+            delBtn.addEventListener("click", function (e) {
+              e.stopPropagation();
+              if (ic._uploaded) {
+                if (!window.confirm("确定删除图标「" + displayName(ic) + "」？该操作会删除服务器上对应的图片文件。")) return;
+                if (SERVER_MODE) {
+                  api("api/delete", "POST", JSON.stringify({ name: ic.file }), true).then(function (res) {
+                    if (res && res.ok) {
+                      showToast("已删除图标，正在刷新…");
+                      setTimeout(function () { location.reload(); }, 500);
+                    } else {
+                      showToast("删除失败：" + ((res && res.error) || "未知错误"));
+                    }
+                  }).catch(function () { showToast("无法连接服务，删除失败"); });
+                } else {
+                  var up = loadUploads().filter(function (u) { return u.name !== ic.file; });
+                  saveUploads(up);
+                  showToast("已删除图标，正在刷新…");
+                  setTimeout(function () { location.reload(); }, 500);
+                }
+              } else {
+                if (!window.confirm("「" + displayName(ic) + "」是 data.js 默认图标。删除后将从页面隐藏，如需恢复请重新添加同名图标或编辑 data.js。确定删除？")) return;
+                hiddenIcons.push(ic.file);
+                saveSettings({ deleted_categories: hiddenCats, deleted_icons: hiddenIcons, icon_moves: iconMoves }).then(function (ok) {
+                  if (ok) {
+                    showToast("已删除图标，正在刷新…");
+                    setTimeout(function () { location.reload(); }, 500);
+                  }
+                });
+              }
+            });
+            card.appendChild(delBtn);
+          }
+
+          function openLink() {
+            if (ic._src) {
+              showToast("本地上传的图标尚未部署：请在设置中下载图片并放入项目 icons/ 目录");
+            } else if (ic.link) {
+              var w = window.open(ic.link, "_blank", "noopener,noreferrer");
+              if (!w) showToast("已阻止弹窗，请允许本站打开新窗口");
+            } else {
+              var u = iconUrl(ic);
+              copyText(u, function (ok) {
+                showToast(ok ? "未配置跳转链接，已复制图标链接" : "复制失败", ok ? u : null);
+              });
+            }
+          }
+          card.addEventListener("click", openLink);
+          card.addEventListener("keydown", function (e) {
+            if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openLink(); }
+          });
+          copyBtn.addEventListener("click", function (e) {
+            e.stopPropagation();
+            if (ic._src) {
+              showToast("本地上传的图标尚未部署：请在设置中下载图片并放入项目 icons/ 目录");
+              return;
+            }
+            var u = iconUrl(ic);
+            copyText(u, function (ok) {
+              showToast(ok ? "已复制图标链接" : "复制失败，请手动复制", ok ? u : null);
+            });
+          });
+        }
+        grid.appendChild(card);
+      });
+    }
+
+    /* 图标显示名称：优先用 data.js 里自定义的 name，否则取文件名（不含扩展名） */
+    function displayName(ic) {
+      if (ic.name) return ic.name;
+      return (ic.file || "").replace(/\.[^.]+$/, "");
+    }
+
+    /* 排序函数：按名称（a-z，中文按拼音）或添加时间，升序 / 降序 */
+    function sortIcons(list) {
+      var dir = state.sortOrder === "asc" ? 1 : -1;
+      list.sort(function (a, b) {
+        var na = displayName(a), nb = displayName(b);
+        var ta = a.added_at || 0, tb = b.added_at || 0;
+        var r = state.sortBy === "time"
+          ? (ta - tb || na.localeCompare(nb, "zh-CN"))
+          : (na.localeCompare(nb, "zh-CN") || ta - tb);
+        return dir * r;
+      });
+    }
+
+    /* ---------- 搜索 ---------- */
+    searchInput.addEventListener("input", function () {
+      state.keyword = this.value.trim();
+      renderGrid();
+    });
+
+    /* ---------- 排序：按名称 / 添加时间，升序 / 降序 ---------- */
+    document.getElementById("sort-select").addEventListener("change", function () {
+      state.sortBy = this.value;
+      renderGrid();
+    });
+    document.getElementById("sort-toggle").addEventListener("click", function () {
+      state.sortOrder = state.sortOrder === "asc" ? "desc" : "asc";
+      this.textContent = state.sortOrder === "asc" ? "升序" : "降序";
+      renderGrid();
+    });
+
+    /* ============================================================
+     * 整理模式：当前分类图标可单选 / 多选，批量移动或删除
+     * ============================================================ */
+    function toggleManage() {
+      if (!isAdmin()) { showToast("请先登录后使用整理功能"); return; }
+      state.manage = !state.manage;
+      state.selected = {};
+      renderManageBar();
+      renderGrid();
+      updateManageBar();
+      showToast(state.manage ? "整理模式：点击图标可选中 / 取消选中" : "已退出整理模式");
+    }
+    function renderManageBar() {
+      manageTools.style.display = state.manage ? "flex" : "none";
+      manageDeleteBtn.style.display = state.manage ? "" : "none";
+      manageBtn.textContent = state.manage ? "完成" : "整理";
+      manageMoveCat.textContent = "";
+      if (state.manage) {
+        effectiveCatList().forEach(function (c) {
+          var o = document.createElement("option");
+          o.value = c.key;
+          o.textContent = c.name;
+          manageMoveCat.appendChild(o);
+        });
+      }
+    }
+    function updateManageBar() {
+      var n = Object.keys(state.selected).length;
+      manageCount.textContent = "已选 " + n + " 个";
+      manageDeleteBtn.textContent = "删除选中（" + n + "）";
+      manageDeleteBtn.disabled = n === 0;
+      manageMoveBtn.disabled = n === 0;
+    }
+    function toggleSelect(file) {
+      if (state.selected[file]) delete state.selected[file];
+      else state.selected[file] = true;
+      renderGrid();
+      updateManageBar();
+    }
+    /* 批量移动：上传图标调服务端 / 改本地记录；data.js 基础图标记录到 icon_moves */
+    function moveSelected() {
+      var files = Object.keys(state.selected);
+      var cat = manageMoveCat.value;
+      if (!files.length) { showToast("请先选择要移动的图标"); return; }
+      if (!cat) { showToast("请选择目标分类"); return; }
+      var catName = manageMoveCat.options[manageMoveCat.selectedIndex].textContent;
+      if (!window.confirm("将选中的 " + files.length + " 个图标移动到分类「" + catName + "」？")) return;
+      var icons = allIcons();
+      var uploadNames = [];
+      var baseMoves = {};
+      icons.forEach(function (ic) {
+        if (files.indexOf(ic.file) !== -1) {
+          if (ic._uploaded) uploadNames.push(ic.file);
+          else baseMoves[ic.file] = cat;
+        }
+      });
+      var jobs = [];
+      if (SERVER_MODE) {
+        if (uploadNames.length) {
+          jobs.push(api("api/move", "POST", JSON.stringify({ names: uploadNames, category: cat }), true).then(function (res) {
+            if (!(res && res.ok)) { showToast("移动失败：" + ((res && res.error) || "未知错误")); throw new Error("move"); }
+          }));
+        }
+      } else {
+        var up = loadUploads().map(function (u) {
+          if (uploadNames.indexOf(u.name) !== -1) u.category = cat;
+          return u;
+        });
+        saveUploads(up);
+      }
+      var newMoves = {};
+      Object.keys(iconMoves).forEach(function (k) { newMoves[k] = iconMoves[k]; });
+      Object.keys(baseMoves).forEach(function (k) { newMoves[k] = baseMoves[k]; });
+      iconMoves = newMoves;
+      jobs.push(saveSettings({ deleted_categories: hiddenCats, deleted_icons: hiddenIcons, icon_moves: iconMoves }).then(function (ok) {
+        if (!ok) throw new Error("settings");
+      }));
+      Promise.all(jobs).then(function () {
+        showToast("已移动 " + files.length + " 个图标，正在刷新…");
+        setTimeout(function () { location.reload(); }, 600);
+      }).catch(function () {});
+    }
+    /* 批量删除：上传图标真删（服务模式删服务器文件+记录），data.js 基础图标隐藏 */
+    function deleteSelected() {
+      var files = Object.keys(state.selected);
+      if (!files.length) return;
+      if (!window.confirm("确定删除选中的 " + files.length + " 个图标？上传图标将同时删除服务器上的图片文件。")) return;
+      var icons = allIcons();
+      var uploadNames = [];
+      var baseFiles = [];
+      icons.forEach(function (ic) {
+        if (files.indexOf(ic.file) !== -1) {
+          if (ic._uploaded) uploadNames.push(ic.file);
+          else if (baseFiles.indexOf(ic.file) === -1) baseFiles.push(ic.file);
+        }
+      });
+      var jobs = [];
+      if (SERVER_MODE) {
+        uploadNames.forEach(function (f) {
+          jobs.push(api("api/delete", "POST", JSON.stringify({ name: f }), true).then(function (res) {
+            if (!(res && res.ok)) { showToast("删除失败：" + ((res && res.error) || "未知错误")); throw new Error("del"); }
+          }));
+        });
+      } else {
+        var up = loadUploads().filter(function (u) { return uploadNames.indexOf(u.name) === -1; });
+        saveUploads(up);
+      }
+      baseFiles.forEach(function (f) {
+        if (hiddenIcons.indexOf(f) === -1) hiddenIcons.push(f);
+      });
+      jobs.push(saveSettings({ deleted_categories: hiddenCats, deleted_icons: hiddenIcons, icon_moves: iconMoves }).then(function (ok) {
+        if (!ok) throw new Error("settings");
+      }));
+      Promise.all(jobs).then(function () {
+        showToast("已删除 " + files.length + " 个图标，正在刷新…");
+        setTimeout(function () { location.reload(); }, 600);
+      }).catch(function () {});
+    }
+    manageBtn.addEventListener("click", toggleManage);
+    manageMoveBtn.addEventListener("click", moveSelected);
+    manageDeleteBtn.addEventListener("click", deleteSelected);
+
+    /* ---------- 设置面板 ---------- */
+    function currentBasePreview() {
+      var base = baseInput.value.trim();
+      if (base) {
+        if (base.slice(-1) !== "/") base += "/";
+        return base + "icons/图标文件名";
+      }
+      try { return new URL("icons/图标文件名", location.href).href; }
+      catch (e) { return "icons/图标文件名"; }
+    }
+    function updatePreview() {
+      var p = document.getElementById("base-preview");
+      if (p) p.textContent = currentBasePreview();
+    }
+    function openSettings() {
+      settingsPanel.classList.add("open");
+      updatePreview();
+      renderUploadManage();
+      renderCatManage();
+      baseInput.focus();
+      baseInput.select();
+    }
+    document.getElementById("settings-btn").addEventListener("click", function () {
+      settingsPanel.classList.contains("open") ? settingsPanel.classList.remove("open") : openSettings();
+    });
+    document.getElementById("settings-close").addEventListener("click", function () {
+      settingsPanel.classList.remove("open");
+    });
+    document.getElementById("base-reset").addEventListener("click", function () {
+      baseInput.value = (DATA.baseUrl || "").trim();
+      try { localStorage.removeItem(BASE_KEY); } catch (e) {}
+      updatePreview();
+      showToast("已恢复默认（自动匹配当前部署环境）");
+    });
+    baseInput.addEventListener("input", function () {
+      try { localStorage.setItem(BASE_KEY, this.value.trim()); } catch (e) {}
+      updatePreview();
+    });
+    document.addEventListener("click", function (e) {
+      if (settingsPanel.classList.contains("open") &&
+          !settingsPanel.contains(e.target) &&
+          e.target.id !== "settings-btn") {
+        settingsPanel.classList.remove("open");
+      }
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") { settingsPanel.classList.remove("open"); closeUpload(); }
+    });
+
+    /* ============================================================
+     * 上传弹窗：点击 / 拖拽选择图片 → 选择分类 → 保存到本地并刷新
+     * ============================================================ */
+    function openUpload() {
+      uploadMask.classList.add("open");
+      document.body.style.overflow = "hidden";
+    }
+    function closeUpload() {
+      uploadMask.classList.remove("open");
+      document.body.style.overflow = "";
+    }
+    document.getElementById("upload-btn").addEventListener("click", openUpload);
+    document.getElementById("upload-close").addEventListener("click", closeUpload);
+    document.getElementById("upload-cancel").addEventListener("click", closeUpload);
+    uploadMask.addEventListener("click", function (e) {
+      if (e.target === uploadMask) closeUpload();
+    });
+
+    dropzone.addEventListener("click", function () { fileInput.click(); });
+    dropzone.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); }
+    });
+    dropzone.addEventListener("dragover", function (e) {
+      e.preventDefault();
+      dropzone.classList.add("drag");
+    });
+    dropzone.addEventListener("dragleave", function () {
+      dropzone.classList.remove("drag");
+    });
+    dropzone.addEventListener("drop", function (e) {
+      e.preventDefault();
+      dropzone.classList.remove("drag");
+      addUploadFiles(e.dataTransfer.files);
+    });
+    fileInput.addEventListener("change", function () {
+      addUploadFiles(this.files);
+      this.value = "";
+    });
+
+    function addUploadFiles(list) {
+      var added = 0;
+      Array.prototype.forEach.call(list, function (f) {
+        if (!/^image\//.test(f.type)) {
+          showToast("已跳过非图片文件：" + f.name);
+          return;
+        }
+        uploadQueue.push({ file: f, name: f.name, category: "", size: f.size });
+        added++;
+      });
+      if (added) {
+        renderUploadList();
+        if (!uploadMask.classList.contains("open")) openUpload();
+      }
+    }
+
+    function renderUploadList() {
+      fileList.textContent = "";
+      uploadQueue.forEach(function (item, idx) {
+        var row = el("div", "file-item");
+
+        var img = document.createElement("img");
+        img.src = URL.createObjectURL(item.file);
+        img.alt = item.name;
+
+        var info = el("div", "fi-info");
+        info.appendChild(el("div", "fi-name", item.name));
+        info.appendChild(el("div", "fi-size", (item.size / 1024).toFixed(1) + " KB"));
+
+        var sel = document.createElement("select");
+        sel.setAttribute("aria-label", "选择分类：" + item.name);
+        /* 可选项 = data.js 基础分类（隐藏的除外） + 网页端自定义分类 */
+        var catOptions = (DATA.categories || []).filter(function (c) {
+          return hiddenCats.indexOf(c.id) === -1;
+        }).map(function (c) {
+          return { value: c.id, name: c.name };
+        }).concat(customCategories.filter(function (c) {
+          return hiddenCats.indexOf(c.name) === -1;
+        }).map(function (c) {
+          return { value: c.name, name: c.name };
+        }));
+        catOptions.forEach(function (co) {
+          var o = document.createElement("option");
+          o.value = co.value;
+          o.textContent = co.name;
+          if (item.category === co.value) o.selected = true;
+          sel.appendChild(o);
+        });
+        var newOpt = document.createElement("option");
+        newOpt.value = "__new__";
+        newOpt.textContent = "新建分类…";
+        sel.appendChild(newOpt);
+        sel.addEventListener("change", function () {
+          if (sel.value === "__new__") {
+            if (!item.newCatInput) showNewCatInput(row, item, sel);
+          } else {
+            item.category = sel.value;
+            item.newCatName = "";
+            if (item.newCatInput) { item.newCatInput.remove(); item.newCatInput = null; }
+          }
+        });
+
+        /* 自定义跳转链接（可选）：上传后点击图标直接打开该链接 */
+        var linkInp = document.createElement("input");
+        linkInp.type = "text";
+        linkInp.className = "fi-link";
+        linkInp.placeholder = "跳转链接（可选）";
+        linkInp.value = item.link || "";
+        linkInp.setAttribute("aria-label", "跳转链接：" + item.name);
+        linkInp.addEventListener("input", function () { item.link = this.value.trim(); });
+
+        var del = el("button", "fi-del", "×");
+        del.type = "button";
+        del.title = "移除";
+        del.setAttribute("aria-label", "移除 " + item.name);
+        del.addEventListener("click", function () {
+          uploadQueue.splice(idx, 1);
+          renderUploadList();
+        });
+
+        row.appendChild(img);
+        row.appendChild(info);
+        row.appendChild(sel);
+        row.appendChild(linkInp);
+        row.appendChild(del);
+        fileList.appendChild(row);
+      });
+      uploadSubmit.disabled = uploadQueue.length === 0;
+      uploadSubmit.textContent = uploadQueue.length ? "开始上传（" + uploadQueue.length + "）" : "开始上传";
+    }
+
+    function showNewCatInput(row, item, sel) {
+      var input = document.createElement("input");
+      input.type = "text";
+      input.className = "fi-newcat";
+      input.placeholder = "新分类名";
+      input.setAttribute("aria-label", "新分类名");
+      input.addEventListener("input", function () { item.newCatName = this.value.trim(); });
+      row.insertBefore(input, sel.nextSibling);
+      item.newCatInput = input;
+      input.focus();
+    }
+
+    uploadSubmit.addEventListener("click", function () {
+      if (!uploadQueue.length) return;
+      if (SERVER_MODE) {
+        uploadViaServer();
+      } else {
+        uploadViaLocalStorage();
+      }
+    });
+
+    /* 服务模式：POST 到后端，图片直接写入服务器 icons/，记录写入 data/uploads.json */
+    function uploadViaServer() {
+      var total = uploadQueue.length;
+      var failed = false;
+      uploadSubmit.disabled = true;
+      uploadSubmit.textContent = "上传中…";
+      function finishUploadFail() {
+        uploadSubmit.disabled = false;
+        uploadSubmit.textContent = uploadQueue.length ? "开始上传（" + uploadQueue.length + "）" : "开始上传";
+      }
+      function next(i) {
+        if (failed) return;
+        if (i >= total) {
+          showToast("已上传 " + total + " 个图标，正在刷新…");
+          setTimeout(function () { location.reload(); }, 600);
+          return;
+        }
+        var item = uploadQueue[i];
+        var category = item.newCatName || item.category || "other";
+        var fd = new FormData();
+        fd.append("file", item.file, item.name);
+        fd.append("category", category);
+        fd.append("link", item.link || "");
+        api("api/upload", "POST", fd, false).then(function (res) {
+          if (res && res.ok) {
+            next(i + 1);
+          } else {
+            failed = true;
+            showToast("上传失败：" + ((res && res.error) || "未知错误"));
+            finishUploadFail();
+          }
+        }).catch(function () {
+          failed = true;
+          showToast("无法连接上传服务，请确认已启动 upload_server.py（或 Docker）");
+          finishUploadFail();
+        });
+      }
+      next(0);
+    }
+
+    /* 静态模式（file:// 双击打开）：保存到浏览器本地存储 */
+    function uploadViaLocalStorage() {
+      var list = loadUploads();
+      var idx = 0;
+      var failed = false;
+      function next() {
+        if (failed) return;
+        if (idx >= uploadQueue.length) {
+          try {
+            saveUploads(list);
+          } catch (e) {
+            failed = true;
+            showToast("保存失败：图片可能过大（单张建议 1MB 内），请压缩后重试");
+            closeUpload();
+            return;
+          }
+          showToast("已上传 " + uploadQueue.length + " 个图标，正在刷新…");
+          setTimeout(function () { location.reload(); }, 600);
+          return;
+        }
+        var item = uploadQueue[idx++];
+        var category = item.newCatName || item.category;
+        var reader = new FileReader();
+        reader.onload = function (e) {
+          /* 同名文件覆盖旧记录 */
+          list = list.filter(function (u) { return u.name !== item.name; });
+          list.push({ name: item.name, category: category, link: item.link || "", dataUrl: e.target.result, added_at: Date.now() });
+          next();
+        };
+        reader.onerror = function () {
+          failed = true;
+          showToast("读取文件失败：" + item.name);
+          closeUpload();
+        };
+        reader.readAsDataURL(item.file);
+      }
+      next();
+    }
+
+    /* ============================================================
+     * 上传管理（设置面板内）：导出图片 / 复制 data.js 追加记录 / 清空
+     * ============================================================ */
+    function exportRecordsText(up) {
+      if (!up.length) return "";
+      var lines = up.map(function (u) {
+        var linkPart = u.link ? ", \"link\": \"" + u.link + "\"" : "";
+        return "    { \"category\": \"" + u.category + "\", \"file\": \"" + u.name + "\"" + linkPart + " },";
+      });
+      return "// 图片请先放入项目 icons/ 目录，再把以下记录追加到 data.js 的 icons 数组：\n" + lines.join("\n");
+    }
+    function renderUploadManage() {
+      var up = SERVER_MODE ? serverUploads : loadUploads();
+      document.getElementById("upload-manage-title").textContent = "上传的图标（" + up.length + " 个）";
+      document.getElementById("export-records").value = exportRecordsText(up);
+    }
+    document.getElementById("export-download").addEventListener("click", function () {
+      var up = loadUploads();
+      if (!up.length) { showToast("没有可导出的图片"); return; }
+      up.forEach(function (u) {
+        var a = document.createElement("a");
+        a.href = u.dataUrl;
+        a.download = u.name;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      });
+      showToast("已开始下载 " + up.length + " 张图片，请放入项目 icons/ 目录");
+    });
+    document.getElementById("export-copy").addEventListener("click", function () {
+      var t = document.getElementById("export-records").value;
+      if (!t) { showToast("暂无上传记录"); return; }
+      copyText(t, function (ok) { showToast(ok ? "已复制 data.js 追加记录" : "复制失败，请手动复制"); });
+    });
+    document.getElementById("upload-clear").addEventListener("click", function () {
+      var up = loadUploads();
+      if (!up.length) { showToast("没有本地上传数据"); return; }
+      if (!window.confirm("确定清空 " + up.length + " 个本地上传的图标？")) return;
+      try { localStorage.removeItem(UPLOADS_KEY); } catch (e) {}
+      showToast("已清空，正在刷新…");
+      setTimeout(function () { location.reload(); }, 500);
+    });
+
+    /* ============================================================
+     * 分类管理（设置面板内）：添加 / 删除自定义分类
+     * ============================================================ */
+    /* 当前全部分类：data.js 基础（隐藏的除外） + 自定义 + 上传图标中出现的新分类 */
+    function effectiveCatList() {
+      var list = [];
+      (DATA.categories || []).forEach(function (c) {
+        if (hiddenCats.indexOf(c.id) !== -1) return;
+        list.push({ key: c.id, name: c.name, source: "基础" });
+      });
+      customCategories.forEach(function (c) {
+        if (!list.some(function (x) { return x.name === c.name; })) {
+          list.push({ key: c.name, name: c.name, source: "自定义" });
+        }
+      });
+      allIcons().forEach(function (ic) {
+        var hit = list.some(function (x) { return x.key === ic.category || x.name === ic.category; });
+        if (!hit) list.push({ key: ic.category, name: ic.category, source: "上传图标" });
+      });
+      return list;
+    }
+    function countInCategory(catKey) {
+      var n = 0;
+      allIcons().forEach(function (ic) {
+        if (ic.category === catKey) n++;
+      });
+      return n;
+    }
+    function renderCatManage() {
+      var box = document.getElementById("cat-list");
+      if (!box) return;
+      box.textContent = "";
+      effectiveCatList().forEach(function (c) {
+        var row = el("div", "cat-item");
+        var nm = el("span", "ci-name", c.name + "（" + countInCategory(c.key) + "）");
+        var src = el("span", "ci-src", c.source);
+        var del = el("button", "ci-del", "×");
+        del.type = "button";
+        del.title = c.key === "other" ? "「其他」是兜底分类，不可删除" : "删除分类";
+        del.disabled = c.key === "other";
+        del.addEventListener("click", function () {
+          var n = countInCategory(c.key);
+          var tip;
+          if (c.source === "基础") {
+            tip = n
+              ? "「" + c.name + "」是基础分类，其下 " + n + " 个图标将移到「其他」。data.js 中的配置保留，可在网页重新添加同名分类恢复。确定删除？"
+              : "「" + c.name + "」是基础分类。data.js 中的配置保留，可在网页重新添加同名分类恢复。确定删除？";
+          } else {
+            tip = n
+              ? "该分类下有 " + n + " 个图标，删除后这些图标会移到「其他」。确定删除分类「" + c.name + "」？"
+              : "确定删除分类「" + c.name + "」？";
+          }
+          if (!window.confirm(tip)) return;
+          if (c.source === "基础") {
+            /* 基础分类：加入隐藏列表（服务模式写服务器 settings.json） */
+            hiddenCats.push(c.key);
+            saveSettings({ deleted_categories: hiddenCats, deleted_icons: hiddenIcons, icon_moves: iconMoves }).then(function (ok) {
+              if (ok) {
+                showToast("已删除分类，正在刷新…");
+                setTimeout(function () { location.reload(); }, 500);
+              }
+            });
+          } else if (SERVER_MODE) {
+            api("api/categories/delete", "POST", JSON.stringify({ name: c.key }), true).then(function (res) {
+              if (res && res.ok) {
+                customCategories = res.categories || [];
+                showToast("已删除分类，正在刷新…");
+                setTimeout(function () { location.reload(); }, 500);
+              } else {
+                showToast("删除失败：" + ((res && res.error) || "未知错误"));
+              }
+            }).catch(function () { showToast("无法连接服务，删除失败"); });
+          } else {
+            var cats = loadCustomCats().filter(function (x) { return x.name !== c.key; });
+            saveCustomCats(cats);
+            customCategories = cats;
+            var up = loadUploads().map(function (u) {
+              if (u.category === c.key) u.category = "other";
+              return u;
+            });
+            saveUploads(up);
+            showToast("已删除分类，正在刷新…");
+            setTimeout(function () { location.reload(); }, 500);
+          }
+        });
+        row.appendChild(nm);
+        row.appendChild(src);
+        row.appendChild(del);
+        box.appendChild(row);
+      });
+    }
+    document.getElementById("cat-add").addEventListener("click", function () {
+      var inp = document.getElementById("cat-input");
+      var name = inp.value.trim();
+      if (!name) { showToast("请输入分类名称"); return; }
+      var baseHit = (DATA.categories || []).filter(function (c) { return c.name === name; })[0];
+      var customHit = customCategories.some(function (c) { return c.name === name; });
+      if (baseHit && hiddenCats.indexOf(baseHit.id) !== -1) {
+        /* 恢复被隐藏的基础分类 */
+        hiddenCats = hiddenCats.filter(function (x) { return x !== baseHit.id; });
+        saveSettings({ deleted_categories: hiddenCats, deleted_icons: hiddenIcons, icon_moves: iconMoves }).then(function (ok) {
+          if (ok) {
+            showToast("已恢复分类「" + name + "」，正在刷新…");
+            setTimeout(function () { location.reload(); }, 500);
+          }
+        });
+        return;
+      }
+      if (baseHit || customHit) { showToast("分类已存在：" + name); return; }
+      if (SERVER_MODE) {
+        api("api/categories", "POST", JSON.stringify({ name: name }), true).then(function (res) {
+          if (res && res.ok) {
+            showToast("已添加分类「" + name + "」，正在刷新…");
+            setTimeout(function () { location.reload(); }, 500);
+          } else {
+            showToast("添加失败：" + ((res && res.error) || "未知错误"));
+          }
+        }).catch(function () { showToast("无法连接服务，添加失败"); });
+      } else {
+        var cats = loadCustomCats();
+        cats.push({ name: name });
+        saveCustomCats(cats);
+        customCategories = cats;
+        showToast("已添加分类「" + name + "」，正在刷新…");
+        setTimeout(function () { location.reload(); }, 500);
+      }
+    });
+    document.getElementById("cat-input").addEventListener("keydown", function (e) {
+      if (e.key === "Enter") document.getElementById("cat-add").click();
+    });
+
+    /* ---------- 站点名称：自定义网页标题与左上角名称 ---------- */
+    function applySiteTitle(t) {
+      if (!t) return;
+      document.getElementById("site-title").textContent = t;
+      document.title = t + " · 个人图标收藏";
+    }
+    document.getElementById("title-input").addEventListener("keydown", function (e) {
+      if (e.key === "Enter") document.getElementById("title-save").click();
+    });
+    document.getElementById("title-save").addEventListener("click", function () {
+      var t = document.getElementById("title-input").value.trim();
+      if (!t) { showToast("站点名称不能为空"); return; }
+      if (SERVER_MODE) {
+        api("api/settings", "POST", JSON.stringify({ title: t }), true).then(function (res) {
+          if (res && res.ok) {
+            settings = res.settings || settings;
+            applySiteTitle(settings.title || t);
+            showToast("已保存站点名称");
+          } else {
+            showToast("保存失败：" + ((res && res.error) || "未知错误"));
+          }
+        }).catch(function () { showToast("无法连接服务，保存失败"); });
+      } else {
+        try { localStorage.setItem(TITLE_KEY, t); } catch (e) {}
+        applySiteTitle(t);
+        showToast("已保存站点名称");
+      }
+    });
+
+    /* ---------- 外观主题：日间 / 夜间 / 跟随系统 ---------- */
+    document.querySelectorAll('input[name="theme"]').forEach(function (r) {
+      if (r.value === savedTheme) r.checked = true;
+      r.addEventListener("change", function () {
+        if (!r.checked) return;
+        savedTheme = r.value;
+        try { localStorage.setItem(THEME_KEY, savedTheme); } catch (e) {}
+        applyTheme();
+        showToast(savedTheme === "auto" ? "已跟随系统主题" : (savedTheme === "light" ? "已切换日间模式" : "已切换夜间模式"));
+      });
+    });
+
+    /* ---------- 网站图标（favicon）自定义 ---------- */
+    document.getElementById("favicon-pick").addEventListener("click", function () {
+      document.getElementById("favicon-file").click();
+    });
+    document.getElementById("favicon-file").addEventListener("change", function () {
+      var f = this.files && this.files[0];
+      if (!f) return;
+      var rd = new FileReader();
+      rd.onload = function (e) {
+        var inp = document.getElementById("favicon-input");
+        inp.value = e.target.result;
+        applyFavicon(inp.value);
+        showToast("已载入本地图片，点「保存」生效");
+      };
+      rd.readAsDataURL(f);
+      this.value = "";
+    });
+    document.getElementById("favicon-save").addEventListener("click", function () {
+      var v = document.getElementById("favicon-input").value.trim();
+      applyFavicon(v);
+      if (SERVER_MODE) {
+        api("api/settings", "POST", JSON.stringify({ favicon: v }), true).then(function (res) {
+          if (res && res.ok) {
+            settings = res.settings || settings;
+            showToast("网站图标已保存");
+          } else showToast("保存失败：" + ((res && res.error) || "未知错误"));
+        });
+      } else {
+        try { localStorage.setItem(FAVICON_KEY, v); } catch (e) {}
+        showToast("网站图标已保存（仅当前浏览器）");
+      }
+    });
+    document.getElementById("favicon-reset").addEventListener("click", function () {
+      document.getElementById("favicon-input").value = "";
+      applyFavicon("");
+      if (SERVER_MODE) {
+        api("api/settings", "POST", JSON.stringify({ favicon: "" }), true).then(function (res) {
+          if (res && res.ok) showToast("已恢复默认图标");
+          else showToast("保存失败：" + ((res && res.error) || "未知错误"));
+        });
+      } else {
+        try { localStorage.setItem(FAVICON_KEY, ""); } catch (e) {}
+        showToast("已恢复默认图标");
+      }
+    });
+
+    /* ---------- 账号安全：修改管理员密码 ---------- */
+    document.getElementById("pwd-save").addEventListener("click", function () {
+      var oldp = document.getElementById("pwd-old").value;
+      var n1 = document.getElementById("pwd-new").value;
+      var n2 = document.getElementById("pwd-confirm").value;
+      if (!oldp || !n1) { showToast("请填写当前密码和新密码"); return; }
+      if (n1.length < 4) { showToast("新密码至少 4 位"); return; }
+      if (n1 !== n2) { showToast("两次输入的新密码不一致"); return; }
+      function clearPwd() {
+        document.getElementById("pwd-old").value = "";
+        document.getElementById("pwd-new").value = "";
+        document.getElementById("pwd-confirm").value = "";
+      }
+      if (SERVER_MODE) {
+        api("api/change-password", "POST", JSON.stringify({ old_password: oldp, new_password: n1 }), true).then(function (res) {
+          if (res && res.ok) {
+            showToast("密码已修改");
+            clearPwd();
+          } else showToast("修改失败：" + ((res && res.error) || "未知错误"));
+        });
+      } else {
+        var stored = "password";
+        try { stored = localStorage.getItem(PASSWD_KEY) || "password"; } catch (e) {}
+        if (oldp !== stored) { showToast("当前密码不正确"); return; }
+        try { localStorage.setItem(PASSWD_KEY, n1); } catch (e) {}
+        showToast("密码已修改（仅当前浏览器）");
+        clearPwd();
+      }
+    });
+
+    /* ---------- 初始化 ---------- */
+    var savedBase = "";
+    try { savedBase = localStorage.getItem(BASE_KEY); } catch (e) {}
+    baseInput.value = (savedBase != null ? savedBase : (DATA.baseUrl || "")).trim();
+
+    /* 站点名称：优先本机已保存的（服务模式随后会被服务器 settings 覆盖） */
+    var initTitle = DATA.title || "Icons Home";
+    try { initTitle = localStorage.getItem(TITLE_KEY) || initTitle; } catch (e) {}
+    applySiteTitle(initTitle);
+    document.getElementById("title-input").value = initTitle;
+
+    /* 静态模式：从浏览器本地读取自定义分类与隐藏列表、favicon */
+    if (!SERVER_MODE) {
+      customCategories = loadCustomCats();
+      loadHidden();
+      var savedFav = "";
+      try { savedFav = localStorage.getItem(FAVICON_KEY) || ""; } catch (e) {}
+      if (savedFav) {
+        applyFavicon(savedFav);
+        document.getElementById("favicon-input").value = savedFav;
+      }
+    }
+
+    /* 服务模式：拉取后端上传列表 / 自定义分类 / 站点设置，合并渲染；静态模式：保留「导出到 data.js」入口 */
+    if (SERVER_MODE) {
+      document.getElementById("um-tip").textContent = "已连接后端服务：上传的图片直接保存到服务器项目 icons/ 目录，记录写入 data/uploads.json，所有访问者刷新后即可看到。";
+      document.getElementById("um-export").style.display = "none";
+      Promise.all([
+        api("api/uploads").catch(function () { return {}; }),
+        api("api/categories").catch(function () { return {}; }),
+        api("api/settings").catch(function () { return {}; })
+      ]).then(function (rs) {
+        if (rs[0] && rs[0].ok && Array.isArray(rs[0].uploads)) serverUploads = rs[0].uploads;
+        if (rs[1] && rs[1].ok && Array.isArray(rs[1].categories)) customCategories = rs[1].categories;
+        if (rs[2] && rs[2].ok && rs[2].settings) {
+          settings = rs[2].settings;
+          if (settings.title) {
+            applySiteTitle(settings.title);
+            document.getElementById("title-input").value = settings.title;
+          }
+          if (settings.favicon) {
+            applyFavicon(settings.favicon);
+            document.getElementById("favicon-input").value = settings.favicon;
+          }
+        }
+        loadHidden();
+        renderCategories();
+        renderGrid();
+        renderUploadManage();
+        renderCatManage();
+      }).catch(function () { /* 后端暂不可用：仅显示 data.js 配置图标 */ });
+    }
+
+    renderAuthUI();
+    renderCategories();
+    renderGrid();
+
+    /* 服务模式：校验本地 token 是否仍有效（服务重启后失效则自动登出） */
+    if (SERVER_MODE) {
+      var authCheck = loadAuth();
+      if (authCheck && authCheck.token) {
+        api("api/auth/check").then(function (res) {
+          if (!(res && res.ok)) {
+            auth = null;
+            try { localStorage.removeItem(AUTH_KEY); } catch (e) {}
+            renderAuthUI();
+          }
+        });
+      }
+    }
+  })();
+</script>
+</body>
+</html>
