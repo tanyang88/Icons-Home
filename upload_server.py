@@ -10,6 +10,11 @@ Icons Home 上传服务
   - 上传记录     → 写入 data/uploads.json（程序自动维护，建议加入 .gitignore）
   - 所有访问者刷新页面后都能看到新图标
 
+管理员模式：
+  - 初始账户 admin / password（首次启动自动写入 data/auth.json，密码为加盐哈希存储）
+  - POST /api/login 校验通过后返回 token，之后所有写接口需带 X-Auth-Token 请求头
+  - 服务重启后 token 失效，需重新登录
+
 用法（Windows / Linux / macOS 通用）：
     python upload_server.py                   # 监听 0.0.0.0:8000，托管脚本所在目录
     python upload_server.py --port 9000       # 换端口
@@ -20,19 +25,25 @@ Docker 部署：见 docker-compose.yml（docker compose up -d）
 nginx 反代：见 README.md「用 nginx 反代上传服务」
 
 接口：
-    GET  /api/uploads           返回已上传图标记录（页面渲染时合并到图标列表）
-    GET  /api/categories        返回网页端自定义分类（data/categories.json）
-    GET  /api/settings          返回站点设置（标题、隐藏的分类/图标，data/settings.json）
-    POST /api/upload            接收 multipart 上传（字段：file=图片文件、category=分类名、link=自定义跳转链接可选）
-    POST /api/categories        新增自定义分类（JSON：{"name": "分类名"}）
-    POST /api/categories/delete 删除自定义分类，并把该分类下的上传图标移到 other（JSON：{"name": "分类名"}）
-    POST /api/delete            删除网页上传的图标：删 icons/ 文件 + uploads 记录（JSON：{"name": "文件名"}）
-    POST /api/settings          更新站点设置（JSON：{title?, deleted_categories?, deleted_icons?}）
+    GET  /api/uploads             返回已上传图标记录（页面渲染时合并到图标列表）
+    GET  /api/categories          返回网页端自定义分类（data/categories.json）
+    GET  /api/settings            返回站点设置（标题、隐藏的分类/图标、移动记录、favicon）
+    GET  /api/auth/check          校验登录状态（需 X-Auth-Token）
+    POST /api/login               管理员登录（JSON：{username, password} → {token, username}）
+    POST /api/change-password     修改密码（需登录，JSON：{old_password, new_password}）
+    POST /api/upload              接收 multipart 上传（需登录；字段：file、category、link 可选）
+    POST /api/categories          新增自定义分类（需登录，JSON：{"name": "分类名"}）
+    POST /api/categories/delete   删除自定义分类并把其下上传图标移到 other（需登录）
+    POST /api/delete              删除网页上传的图标：删 icons/ 文件 + uploads 记录（需登录）
+    POST /api/move                批量移动上传图标的分类（需登录，JSON：{names: [...], category}）
+    POST /api/settings            更新站点设置（需登录；title? / deleted_categories? / deleted_icons? / icon_moves? / favicon?）
 """
 import email
+import hashlib
 import json
 import os
 import re
+import secrets
 import sys
 import time
 from email import policy
@@ -42,6 +53,9 @@ ALLOWED_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".svg", ".gif"}
 MAX_BODY = 20 * 1024 * 1024  # 单次请求体上限 20MB
 
 ARGS = {"host": "0.0.0.0", "port": 8000, "dir": os.path.dirname(os.path.abspath(__file__))}
+
+# 写接口（需登录）：token -> username（内存，重启失效）
+TOKENS = {}
 
 
 def parse_args(argv):
@@ -76,6 +90,48 @@ def clean_filename(name):
     return name
 
 
+def hash_password(password, salt):
+    return hashlib.sha256((salt + "::" + password).encode("utf-8")).hexdigest()
+
+
+class AuthStore:
+    """data/auth.json：管理员账户（加盐哈希存储，绝不存明文密码）"""
+
+    def __init__(self, data_dir):
+        self.path = os.path.join(data_dir, "auth.json")
+        os.makedirs(data_dir, exist_ok=True)
+        if not os.path.exists(self.path):
+            self.set_password("admin", "password")
+
+    def _write(self, obj):
+        tmp = self.path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(obj, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, self.path)
+
+    def load(self):
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+        return {}
+
+    def verify(self, username, password):
+        u = self.load().get(username or "")
+        if not u:
+            return False
+        return u.get("hash") == hash_password(password or "", u.get("salt", ""))
+
+    def set_password(self, username, password):
+        salt = secrets.token_hex(8)
+        obj = self.load()
+        obj[username] = {"salt": salt, "hash": hash_password(password, salt)}
+        self._write(obj)
+
+
 class UploadsStore:
     """data/uploads.json 的读写封装（原子写入，同名覆盖）"""
 
@@ -101,6 +157,9 @@ class UploadsStore:
             pass
         return []
 
+    def save(self, records):
+        self._write(records)
+
     def upsert(self, name, category, link=""):
         """新增或覆盖同名记录（含自定义链接与添加时间），返回最新列表"""
         records = [r for r in self.load() if r.get("name") != name]
@@ -121,6 +180,18 @@ class UploadsStore:
         for r in records:
             if r.get("category") == old_name:
                 r["category"] = new_name
+                changed = True
+        if changed:
+            self._write(records)
+        return records
+
+    def move_many(self, names, category):
+        """批量把指定文件名的记录移到目标分类，返回最新列表"""
+        records = [dict(r) for r in self.load()]
+        changed = False
+        for r in records:
+            if r.get("name") in names and r.get("category") != category:
+                r["category"] = category
                 changed = True
         if changed:
             self._write(records)
@@ -169,7 +240,7 @@ class CategoriesStore:
 
 
 class SettingsStore:
-    """data/settings.json：站点级设置（标题、隐藏的分类/图标）"""
+    """data/settings.json：站点级设置（标题、隐藏的分类/图标、移动记录、favicon）"""
 
     def __init__(self, data_dir):
         self.path = os.path.join(data_dir, "settings.json")
@@ -201,7 +272,7 @@ class SettingsStore:
 
 
 class Handler(SimpleHTTPRequestHandler):
-    """静态托管 + 上传 / 分类管理 / 图标删除 / 站点设置 API"""
+    """静态托管 + 上传 / 分类管理 / 图标删除 / 批量移动 / 站点设置 / 管理员认证 API"""
 
     def __init__(self, *args, **kwargs):
         kwargs["directory"] = ARGS["dir"]
@@ -209,6 +280,7 @@ class Handler(SimpleHTTPRequestHandler):
         self.store = UploadsStore(data_dir)
         self.categories = CategoriesStore(data_dir)
         self.settings = SettingsStore(data_dir)
+        self.auth = AuthStore(data_dir)
         super().__init__(*args, **kwargs)
 
     # ---------- 响应工具 ----------
@@ -220,8 +292,16 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _err(self, msg, code=400):
-        self._json({"ok": False, "error": msg}, code)
+    def _err(self, msg, code=400, errcode=""):
+        self._json({"ok": False, "error": msg, "code": errcode}, code)
+
+    def _check_auth(self):
+        """写接口鉴权：请求头 X-Auth-Token 必须是已签发的有效 token"""
+        token = self.headers.get("X-Auth-Token", "")
+        return bool(token and TOKENS.get(token))
+
+    def _auth_user(self):
+        return TOKENS.get(self.headers.get("X-Auth-Token", ""), "")
 
     # ---------- GET ----------
     def do_GET(self):
@@ -235,15 +315,41 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/settings":
             self._json({"ok": True, "settings": self.settings.load()})
             return
+        if path == "/api/auth/check":
+            user = self._auth_user()
+            if user:
+                self._json({"ok": True, "username": user})
+            else:
+                self._err("未登录或登录已过期", 401, "auth")
+            return
         super().do_GET()
 
     # ---------- POST ----------
     def do_POST(self):
         path = self.path.split("?")[0]
+        if path == "/api/login":
+            data = self._read_json()
+            if data is not None:
+                self._handle_login(data)
+            return
+        if path == "/api/change-password":
+            if not self._check_auth():
+                self._err("未登录或登录已过期，请重新登录", 401, "auth")
+                return
+            data = self._read_json()
+            if data is not None:
+                self._handle_change_password(data)
+            return
         if path == "/api/upload":
+            if not self._check_auth():
+                self._err("未登录或登录已过期，请重新登录", 401, "auth")
+                return
             self._handle_upload()
             return
-        if path in ("/api/categories", "/api/categories/delete", "/api/delete", "/api/settings"):
+        if path in ("/api/categories", "/api/categories/delete", "/api/delete", "/api/move", "/api/settings"):
+            if not self._check_auth():
+                self._err("未登录或登录已过期，请重新登录", 401, "auth")
+                return
             data = self._read_json()
             if data is None:
                 return
@@ -253,6 +359,8 @@ class Handler(SimpleHTTPRequestHandler):
                 self._handle_delete_category(data)
             elif path == "/api/delete":
                 self._handle_delete_icon(data)
+            elif path == "/api/move":
+                self._handle_move(data)
             else:
                 self._handle_update_settings(data)
             return
@@ -273,6 +381,31 @@ class Handler(SimpleHTTPRequestHandler):
             self._err("请求体不是有效 JSON")
             return None
 
+    # ---------- 认证 ----------
+    def _handle_login(self, data):
+        username = (data.get("username") or "").strip()
+        password = data.get("password") or ""
+        if self.auth.verify(username, password):
+            token = secrets.token_hex(16)
+            TOKENS[token] = username
+            self._json({"ok": True, "token": token, "username": username})
+        else:
+            self._err("用户名或密码错误", 401)
+
+    def _handle_change_password(self, data):
+        username = self._auth_user()
+        old = data.get("old_password") or ""
+        new = data.get("new_password") or ""
+        if not self.auth.verify(username, old):
+            self._err("当前密码不正确", 401)
+            return
+        if len(new) < 4:
+            self._err("新密码至少 4 位")
+            return
+        self.auth.set_password(username, new)
+        self._json({"ok": True})
+
+    # ---------- 上传 ----------
     def _handle_upload(self):
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -312,6 +445,7 @@ class Handler(SimpleHTTPRequestHandler):
             self.store.upsert(name, category, link)
         self._json({"ok": True, "count": len(saved), "files": saved})
 
+    # ---------- 分类 / 图标 / 移动 ----------
     def _handle_add_category(self, data):
         name = (data.get("name") or "").strip()
         if not name:
@@ -352,8 +486,22 @@ class Handler(SimpleHTTPRequestHandler):
         self.store.remove(name)
         self._json({"ok": True})
 
+    def _handle_move(self, data):
+        names = []
+        for x in (data.get("names") or []):
+            n = clean_filename(str(x))
+            if n:
+                names.append(n)
+        if not names:
+            self._err("没有可移动的图标")
+            return
+        category = (str(data.get("category") or "")).strip()[:50] or "other"
+        records = self.store.move_many(names, category)
+        self._json({"ok": True, "uploads": records})
+
+    # ---------- 站点设置 ----------
     def _handle_update_settings(self, data):
-        """更新站点设置：标题 / 隐藏的基础分类 / 隐藏的基础图标（全量替换列表）"""
+        """更新站点设置：标题 / 隐藏的基础分类 / 隐藏的基础图标 / 图标移动记录 / favicon"""
         patch = {}
         if "title" in data:
             t = (data.get("title") or "").strip()
@@ -373,6 +521,20 @@ class Handler(SimpleHTTPRequestHandler):
             icons = [i for i in icons if i]
             # 去重保序
             patch["deleted_icons"] = list(dict.fromkeys(icons))
+        if "icon_moves" in data:
+            moves = data.get("icon_moves")
+            if not isinstance(moves, dict):
+                self._err("icon_moves 必须是对象")
+                return
+            clean_moves = {}
+            for k, v in moves.items():
+                nk = clean_filename(str(k))
+                if nk:
+                    clean_moves[nk] = (str(v) or "").strip()[:50]
+            patch["icon_moves"] = clean_moves
+        if "favicon" in data:
+            f = (data.get("favicon") or "").strip()[:500]
+            patch["favicon"] = f
         if not patch:
             self._err("没有可更新的字段")
             return
@@ -412,8 +574,9 @@ def main():
     if not os.path.isdir(ARGS["dir"]):
         print("项目目录不存在：" + ARGS["dir"], file=sys.stderr)
         sys.exit(1)
-    # 确保 data/uploads.json 与 icons/ 存在
+    # 确保 data/uploads.json、data/auth.json 与 icons/ 存在
     store = UploadsStore(os.path.join(ARGS["dir"], "data"))
+    AuthStore(os.path.join(ARGS["dir"], "data"))
     os.makedirs(os.path.join(ARGS["dir"], "icons"), exist_ok=True)
 
     server = ThreadingHTTPServer((ARGS["host"], ARGS["port"]), Handler)
@@ -421,6 +584,7 @@ def main():
     print("Icons Home 已启动：" + url)
     print("项目目录：" + ARGS["dir"])
     print("上传记录：" + store.path)
+    print("管理员：admin / password（登录后可修改密码）")
     print("按 Ctrl+C 停止")
     try:
         server.serve_forever()
