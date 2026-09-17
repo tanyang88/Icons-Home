@@ -208,13 +208,18 @@
     border: 1px solid var(--border); border-radius: 8px; font-size: 13px; outline: none;
   }
   .settings-panel input[type="text"]:focus { border-color: var(--accent); }
-  .settings-panel .row { display: flex; gap: 8px; }
+  .settings-panel .row { display: flex; gap: 8px; align-items: center; }
   .settings-panel .btn {
-    flex: 1; padding: 8px 0; text-align: center; cursor: pointer;
+    flex: 1; height: 38px; padding: 0 12px; text-align: center; cursor: pointer;
     border: 1px solid var(--border); border-radius: 8px;
     background: var(--surface); color: var(--text); font-size: 13px;
+    display: inline-flex; align-items: center; justify-content: center;
+    white-space: nowrap;
   }
   .settings-panel .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .settings-panel .cat-input {
+    height: 38px; padding: 0 12px; width: 100%;
+  }
   .preview-line {
     font-size: 12px; color: var(--muted); line-height: 1.6; margin-bottom: 12px;
     word-break: break-all;
@@ -545,11 +550,13 @@
       <h4>账号安全</h4>
       <p class="um-tip">修改管理员用户名或密码（服务模式对所有访问者生效）。</p>
       <input type="text" class="cat-input" id="user-input" placeholder="管理员用户名" style="margin-bottom:8px;" autocomplete="username">
-      <button type="button" class="btn" id="user-save" style="margin-bottom:14px;">修改用户名</button>
       <input type="password" class="cat-input" id="pwd-old" placeholder="当前密码" style="margin-bottom:8px;" autocomplete="current-password">
       <input type="password" class="cat-input" id="pwd-new" placeholder="新密码（至少 4 位）" style="margin-bottom:8px;" autocomplete="new-password">
-      <input type="password" class="cat-input" id="pwd-confirm" placeholder="确认新密码" style="margin-bottom:8px;" autocomplete="new-password">
-      <button type="button" class="btn" id="pwd-save">修改密码</button>
+      <input type="password" class="cat-input" id="pwd-confirm" placeholder="确认新密码" style="margin-bottom:14px;" autocomplete="new-password">
+      <div class="row">
+        <button type="button" class="btn" id="user-save">修改用户名</button>
+        <button type="button" class="btn" id="pwd-save">修改密码</button>
+      </div>
     </div>
     <div class="upload-manage">
       <h4>网站图标（favicon）</h4>
@@ -572,6 +579,15 @@
         <button type="button" class="btn" id="cat-add" style="flex:none;padding:8px 14px;">添加</button>
       </div>
       <div id="cat-list" class="cat-list"></div>
+    </div>
+    <div class="upload-manage">
+      <h4>备份与恢复</h4>
+      <p class="um-tip">备份：把全部图标与数据打包成「项目名_时间戳.zip」下载到本地。重新部署后点「恢复」导入该压缩包即可还原所有数据（服务模式还原 icons/ 与 data/ 目录，静态模式还原浏览器数据）。</p>
+      <div class="row">
+        <button type="button" class="btn" id="backup-btn">备份</button>
+        <button type="button" class="btn" id="restore-btn">恢复</button>
+      </div>
+      <input type="file" id="restore-file" accept=".zip,application/zip" hidden>
     </div>
     <div class="upload-manage">
       <h4 id="upload-manage-title">上传的图标（0 个）</h4>
@@ -1919,6 +1935,342 @@
       showToast("密码已修改（仅当前浏览器）");
       clearPwd();
     }
+  });
+
+  /* ============================================================
+   * 备份与恢复：把全部图标与数据打包成「项目名_时间戳.zip」下载，
+   * 重新部署后导入该压缩包即可还原。
+   *   - 服务模式：后端打包 icons/ + data/ 目录，恢复时覆盖这两目录
+   *   - 静态模式：打包浏览器本地数据（含图片 DataURL），恢复时写回 localStorage
+   * ============================================================ */
+  function timestampForZip() {
+    var d = new Date();
+    function p(n) { return (n < 10 ? "0" : "") + n; }
+    return "" + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + "-" +
+           p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
+  }
+  function projectZipName() {
+    var t = (DATA.title || "Icons-Home").trim() || "Icons-Home";
+    return t.replace(/[\\/:*?"<>|\s]+/g, "_") + "_" + timestampForZip() + ".zip";
+  }
+
+  /* ---------- 极简 ZIP 写入（stored 无压缩，UTF-8 文件名） ---------- */
+  var CRC_TABLE = (function () {
+    var t = new Uint32Array(256);
+    for (var n = 0; n < 256; n++) {
+      var c = n;
+      for (var k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      t[n] = c >>> 0;
+    }
+    return t;
+  })();
+  function crc32Bytes(bytes) {
+    var c = 0xFFFFFFFF;
+    for (var i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+    return (c ^ 0xFFFFFFFF) >>> 0;
+  }
+  function strBytes(s) {
+    var enc = new TextEncoder();
+    return enc.encode(s);
+  }
+  function makeZip(files) {
+    /* files: [{name, data(Uint8Array)}]，返回 Uint8Array（stored 方法） */
+    var chunks = [];
+    var central = [];
+    var offset = 0;
+    var dosTime = 0x0000; /* 0:00, 1980-01-01，够用即可 */
+    var dosDate = 0x0021;
+    files.forEach(function (f) {
+      var nameB = strBytes(f.name);
+      var data = f.data;
+      var crc = crc32Bytes(data);
+      var local = new Uint8Array(30 + nameB.length);
+      var dv = new DataView(local.buffer);
+      dv.setUint32(0, 0x04034b50, true);
+      dv.setUint16(4, 20, true);
+      dv.setUint16(6, 0x0800, true); /* UTF-8 文件名 */
+      dv.setUint16(8, 0, true);      /* stored */
+      dv.setUint16(10, dosTime, true);
+      dv.setUint16(12, dosDate, true);
+      dv.setUint32(14, crc, true);
+      dv.setUint32(18, data.length, true);
+      dv.setUint32(22, data.length, true);
+      dv.setUint16(26, nameB.length, true);
+      dv.setUint16(28, 0, true);
+      local.set(nameB, 30);
+      chunks.push(local, data);
+      var cen = new Uint8Array(46 + nameB.length);
+      var cdv = new DataView(cen.buffer);
+      cdv.setUint32(0, 0x02014b50, true);
+      cdv.setUint16(4, 20, true);
+      cdv.setUint16(6, 20, true);
+      cdv.setUint16(8, 0x0800, true);
+      cdv.setUint16(10, 0, true);
+      cdv.setUint16(12, dosTime, true);
+      cdv.setUint16(14, dosDate, true);
+      cdv.setUint32(16, crc, true);
+      cdv.setUint32(20, data.length, true);
+      cdv.setUint32(24, data.length, true);
+      cdv.setUint16(28, nameB.length, true);
+      cdv.setUint16(30, 0, true);
+      cdv.setUint16(32, 0, true);
+      cdv.setUint16(34, 0, true);
+      cdv.setUint16(36, 0, true);
+      cdv.setUint32(38, 0, true);
+      cdv.setUint32(42, offset, true);
+      cen.set(nameB, 46);
+      central.push(cen);
+      offset += local.length + data.length;
+    });
+    var centralStart = offset;
+    var centralData = [];
+    var centralLen = 0;
+    central.forEach(function (c) { centralData.push(c); centralLen += c.length; });
+    var eocd = new Uint8Array(22);
+    var edv = new DataView(eocd.buffer);
+    edv.setUint32(0, 0x06054b50, true);
+    edv.setUint16(4, 0, true);
+    edv.setUint16(6, 0, true);
+    edv.setUint16(8, files.length, true);
+    edv.setUint16(10, files.length, true);
+    edv.setUint32(12, centralLen, true);
+    edv.setUint32(16, centralStart, true);
+    edv.setUint16(20, 0, true);
+    var all = new Uint8Array(centralStart + centralLen + 22);
+    var pos = 0;
+    chunks.forEach(function (c) { all.set(c, pos); pos += c.length; });
+    centralData.forEach(function (c) { all.set(c, pos); pos += c.length; });
+    all.set(eocd, pos);
+    return all;
+  }
+
+  /* ---------- 极简 ZIP 读取：支持 stored 与 deflate-raw ---------- */
+  function findEocd(buf) {
+    for (var i = buf.length - 22; i >= 0; i--) {
+      if (buf[i] === 0x50 && buf[i + 1] === 0x4b && buf[i + 2] === 0x05 && buf[i + 3] === 0x06) return i;
+    }
+    return -1;
+  }
+  function parseZip(buf) {
+    /* 返回 [{name, data(Uint8Array)}]（仅读取本地文件头，支持 stored / deflate-raw） */
+    var e = findEocd(buf);
+    if (e < 0) throw new Error("不是有效的 ZIP 文件");
+    var dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    var entries = dv.getUint16(e + 8, true);
+    var cdStart = dv.getUint32(e + 16, true);
+    var out = [];
+    var pos = cdStart;
+    for (var n = 0; n < entries; n++) {
+      if (pos + 46 > buf.length) break;
+      if (dv.getUint32(pos, true) !== 0x02014b50) break;
+      var method = dv.getUint16(pos + 10, true);
+      var compSize = dv.getUint32(pos + 20, true);
+      var nameLen = dv.getUint16(pos + 28, true);
+      var extraLen = dv.getUint16(pos + 30, true);
+      var commentLen = dv.getUint16(pos + 32, true);
+      var localOff = dv.getUint32(pos + 42, true);
+      var nameBytes = new Uint8Array(buf.buffer, buf.byteOffset + pos + 46, nameLen);
+      var name = new TextDecoder("utf-8").decode(nameBytes);
+      /* 本地文件头 */
+      var ldv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+      var lNameLen = ldv.getUint16(localOff + 26, true);
+      var lExtraLen = ldv.getUint16(localOff + 28, true);
+      var dataStart = localOff + 30 + lNameLen + lExtraLen;
+      var data = new Uint8Array(buf.buffer, buf.byteOffset + dataStart, compSize);
+      if (method === 8) {
+        /* deflate-raw：用 DecompressionStream 解压 */
+        var ds = new DecompressionStream("deflate-raw");
+        var stream = new Blob([data]).stream().pipeThrough(ds);
+        /* 异步解压在外部处理；这里同步无法完成，先存原始 */
+        out.push({ name: name, method: method, raw: data });
+      } else {
+        out.push({ name: name, method: method, data: data });
+      }
+      pos += 46 + nameLen + extraLen + commentLen;
+    }
+    return out;
+  }
+  function inflateRawAsync(raw) {
+    var stream = new Blob([raw]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+    return new Response(stream).arrayBuffer().then(function (ab) { return new Uint8Array(ab); });
+  }
+
+  /* ---------- 静态模式：收集本地数据 → 打包 ---------- */
+  function collectStaticData() {
+    var up = loadUploads();
+    return {
+      uploads: up,
+      categories: loadCustomCats(),
+      settings: (function () {
+        var s = {};
+        try { s.title = localStorage.getItem(TITLE_KEY) || ""; } catch (e) {}
+        try { s.favicon = localStorage.getItem(FAVICON_KEY) || ""; } catch (e) {}
+        try { s.deleted_categories = JSON.parse(localStorage.getItem(HIDDEN_CATS_KEY) || "[]"); } catch (e) { s.deleted_categories = []; }
+        try { s.deleted_icons = JSON.parse(localStorage.getItem(HIDDEN_ICONS_KEY) || "[]"); } catch (e) { s.deleted_icons = []; }
+        try { s.icon_moves = JSON.parse(localStorage.getItem(MOVES_KEY) || "{}"); } catch (e) { s.icon_moves = {}; }
+        return s;
+      })(),
+      theme: (function () { try { return localStorage.getItem(THEME_KEY) || "auto"; } catch (e) { return "auto"; } })(),
+      baseUrl: (function () { try { return localStorage.getItem(BASE_KEY) || ""; } catch (e) { return ""; } })(),
+      auth: (function () { try { return JSON.parse(localStorage.getItem(AUTH_KEY) || "null"); } catch (e) { return null; } })(),
+      passwd: (function () { try { return localStorage.getItem(PASSWD_KEY) || "password"; } catch (e) { return "password"; } })()
+    };
+  }
+
+  /* ---------- 备份 ---------- */
+  function doBackup() {
+    if (!isAdmin()) { showToast("请先登录后使用备份功能"); return; }
+    var name = projectZipName();
+    if (SERVER_MODE) {
+      var a = loadAuth();
+      var headers = {};
+      if (a && a.token) headers["X-Auth-Token"] = a.token;
+      fetch("api/backup", { headers: headers })
+        .then(function (r) {
+          if (!r.ok) {
+            return r.json().then(function (res) {
+              throw new Error((res && res.error) || "备份失败（HTTP " + r.status + "）");
+            });
+          }
+          return r.blob();
+        })
+        .then(function (blob) {
+          var url = URL.createObjectURL(blob);
+          var link = document.createElement("a");
+          link.href = url;
+          link.download = name;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          setTimeout(function () { URL.revokeObjectURL(url); }, 3000);
+          showToast("备份已导出：" + name);
+        })
+        .catch(function (err) { showToast(err.message || "备份失败"); });
+      return;
+    }
+    /* 静态模式：本地数据打包 zip（图标以 DataURL 保存） */
+    var data = collectStaticData();
+    var files = [];
+    files.push({ name: "data.json", data: strBytes(JSON.stringify(data, null, 2)) });
+    (data.uploads || []).forEach(function (u) {
+      if (u.dataUrl) {
+        try {
+          var m = /^data:([^;]+);base64,(.*)$/.exec(u.dataUrl);
+          if (m) {
+            var bin = atob(m[2]);
+            var bytes = new Uint8Array(bin.length);
+            for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            files.push({ name: "icons/" + u.name, data: bytes });
+          }
+        } catch (e) {}
+      }
+    });
+    try {
+      var zipBytes = makeZip(files);
+      var blob = new Blob([zipBytes], { type: "application/zip" });
+      var url = URL.createObjectURL(blob);
+      var link = document.createElement("a");
+      link.href = url;
+      link.download = name;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setTimeout(function () { URL.revokeObjectURL(url); }, 3000);
+      showToast("备份已导出：" + name);
+    } catch (e) {
+      showToast("备份失败：" + e.message);
+    }
+  }
+
+  /* ---------- 恢复 ---------- */
+  function pickRestoreFile() {
+    if (!isAdmin()) { showToast("请先登录后使用恢复功能"); return; }
+    document.getElementById("restore-file").click();
+  }
+  function doRestore(file) {
+    if (!file) return;
+    if (!/\.zip$/i.test(file.name) && file.type !== "application/zip") {
+      showToast("请选择 .zip 备份文件");
+      return;
+    }
+    if (!window.confirm("恢复会覆盖当前全部图标与数据（" + (SERVER_MODE ? "服务模式：icons/ 与 data/ 目录" : "浏览器本地数据") + "）。确定继续？")) return;
+    showToast("正在恢复，请稍候…");
+    if (SERVER_MODE) {
+      var fd = new FormData();
+      fd.append("file", file, file.name);
+      api("api/restore", "POST", fd, false).then(function (res) {
+        if (res && res.ok) {
+          showToast("恢复成功，正在刷新…");
+          setTimeout(function () { location.reload(); }, 800);
+        } else {
+          showToast("恢复失败：" + ((res && res.error) || "未知错误"));
+        }
+      }).catch(function () { showToast("无法连接服务，恢复失败"); });
+      return;
+    }
+    /* 静态模式：解析 zip，读取 data.json 写回 localStorage */
+    file.arrayBuffer().then(function (ab) {
+      var entries = parseZip(new Uint8Array(ab));
+      var dataEntry = null;
+      var iconFiles = {};
+      entries.forEach(function (en) {
+        if (en.name === "data.json" && en.data) dataEntry = en.data;
+        else if (en.name.indexOf("icons/") === 0 && en.data) iconFiles[en.name.slice(6)] = en.data;
+      });
+      /* 处理 deflate 条目（若有） */
+      var inflateJobs = [];
+      entries.forEach(function (en) {
+        if (en.method === 8 && !en.data) {
+          inflateJobs.push(inflateRawAsync(en.raw).then(function (bytes) {
+            if (en.name === "data.json") dataEntry = bytes;
+            else if (en.name.indexOf("icons/") === 0) iconFiles[en.name.slice(6)] = bytes;
+          }));
+        }
+      });
+      Promise.all(inflateJobs).then(function () {
+        if (!dataEntry) { showToast("压缩包中未找到 data.json，恢复失败"); return; }
+        var data;
+        try { data = JSON.parse(new TextDecoder("utf-8").decode(dataEntry)); }
+        catch (e) { showToast("data.json 解析失败，恢复中止"); return; }
+        /* 上传记录若缺 dataUrl，则用压缩包内 icons/ 同名文件补成 DataURL */
+        var MIME_MAP = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", svg: "image/svg+xml", gif: "image/gif" };
+        var uploads = data.uploads || [];
+        uploads.forEach(function (u) {
+          if (!u.dataUrl && iconFiles[u.name]) {
+            try {
+              var ext = (u.name.split(".").pop() || "svg").toLowerCase();
+              var mime = MIME_MAP[ext] || "image/svg+xml";
+              var bin = "";
+              iconFiles[u.name].forEach(function (b) { bin += String.fromCharCode(b); });
+              u.dataUrl = "data:" + mime + ";base64," + btoa(bin);
+            } catch (e2) {}
+          }
+        });
+        /* 写回 localStorage */
+        try {
+          localStorage.setItem(UPLOADS_KEY, JSON.stringify(uploads));
+          localStorage.setItem(CATS_KEY, JSON.stringify(data.categories || []));
+          var s = data.settings || {};
+          if (s.title != null) localStorage.setItem(TITLE_KEY, s.title);
+          if (s.favicon != null) localStorage.setItem(FAVICON_KEY, s.favicon);
+          localStorage.setItem(HIDDEN_CATS_KEY, JSON.stringify(s.deleted_categories || []));
+          localStorage.setItem(HIDDEN_ICONS_KEY, JSON.stringify(s.deleted_icons || []));
+          localStorage.setItem(MOVES_KEY, JSON.stringify(s.icon_moves || {}));
+          if (data.theme) localStorage.setItem(THEME_KEY, data.theme);
+          if (data.baseUrl != null) localStorage.setItem(BASE_KEY, data.baseUrl);
+          if (data.auth) localStorage.setItem(AUTH_KEY, JSON.stringify(data.auth));
+          if (data.passwd) localStorage.setItem(PASSWD_KEY, data.passwd);
+        } catch (e) { showToast("写入浏览器存储失败：" + e.message); return; }
+        showToast("恢复成功，正在刷新…");
+        setTimeout(function () { location.reload(); }, 800);
+      });
+    }).catch(function (e) { showToast("读取压缩包失败：" + e.message); });
+  }
+  document.getElementById("backup-btn").addEventListener("click", doBackup);
+  document.getElementById("restore-btn").addEventListener("click", pickRestoreFile);
+  document.getElementById("restore-file").addEventListener("change", function () {
+    doRestore(this.files && this.files[0]);
+    this.value = "";
   });
 
   /* ---------- 初始化 ---------- */
