@@ -38,15 +38,19 @@ nginx 反代：见 README.md「用 nginx 反代上传服务」
     POST /api/delete              删除网页上传的图标：删 icons/ 文件 + uploads 记录（需登录）
     POST /api/move                批量移动上传图标的分类（需登录，JSON：{names: [...], category}）
     POST /api/settings            更新站点设置（需登录；title? / deleted_categories? / deleted_icons? / icon_moves? / favicon?）
+    GET  /api/backup              备份：打包 icons/ + data/ 为「项目名_时间戳.zip」下载（需登录）
+    POST /api/restore             恢复：接收备份 zip 并覆盖 icons/ 与 data/（需登录，multipart file）
 """
 import email
 import hashlib
+import io
 import json
 import os
 import re
 import secrets
 import sys
 import time
+import zipfile
 from email import policy
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
@@ -342,6 +346,12 @@ class Handler(SimpleHTTPRequestHandler):
             else:
                 self._err("未登录或登录已过期", 401, "auth")
             return
+        if path == "/api/backup":
+            if not self._check_auth():
+                self._err("未登录或登录已过期，请重新登录", 401, "auth")
+                return
+            self._handle_backup()
+            return
         super().do_GET()
 
     # ---------- POST ----------
@@ -373,6 +383,12 @@ class Handler(SimpleHTTPRequestHandler):
                 self._err("未登录或登录已过期，请重新登录", 401, "auth")
                 return
             self._handle_upload()
+            return
+        if path == "/api/restore":
+            if not self._check_auth():
+                self._err("未登录或登录已过期，请重新登录", 401, "auth")
+                return
+            self._handle_restore()
             return
         if path in ("/api/categories", "/api/categories/delete", "/api/delete", "/api/move", "/api/settings"):
             if not self._check_auth():
@@ -585,6 +601,146 @@ class Handler(SimpleHTTPRequestHandler):
             return
         self.settings.update(patch)
         self._json({"ok": True, "settings": self.settings.load()})
+
+    # ---------- 备份 / 恢复 ----------
+    def _handle_backup(self):
+        """打包 icons/ 与 data/（json）为 zip 下载，文件名 = 项目名_时间戳.zip"""
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            icons_dir = os.path.join(ARGS["dir"], "icons")
+            if os.path.isdir(icons_dir):
+                for name in sorted(os.listdir(icons_dir)):
+                    fp = os.path.join(icons_dir, name)
+                    if os.path.isfile(fp):
+                        zf.write(fp, os.path.join("icons", name))
+            data_dir = os.path.join(ARGS["dir"], "data")
+            if os.path.isdir(data_dir):
+                for name in sorted(os.listdir(data_dir)):
+                    fp = os.path.join(data_dir, name)
+                    if os.path.isfile(fp) and name.endswith(".json"):
+                        zf.write(fp, os.path.join("data", name))
+        body = buf.getvalue()
+        proj = os.path.basename(os.path.normpath(ARGS["dir"])) or "Icons-Home"
+        ts = time.strftime("%Y%m%d-%H%M%S")
+        fname = "%s_%s.zip" % (proj, ts)
+        self.send_response(200)
+        self.send_header("Content-Type", "application/zip")
+        self.send_header("Content-Disposition", 'attachment; filename="%s"' % fname)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _handle_restore(self):
+        """接收备份 zip，解压覆盖 icons/ 与 data/（仅允许这两类文件，防路径穿越）"""
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        if length <= 0:
+            self._err("请求体为空")
+            return
+        if length > MAX_BODY:
+            self._err("文件过大（单次上限 20MB）", 413)
+            return
+        body = self.rfile.read(length)
+        files, fields = self._parse_multipart(body)
+        if not files:
+            self._err("未收到备份文件")
+            return
+        fname, content = files[0]
+        if not content or content[:2] != b"PK":
+            self._err("不是有效的 ZIP 备份文件")
+            return
+
+        icons_dir = os.path.join(ARGS["dir"], "icons")
+        data_dir = os.path.join(ARGS["dir"], "data")
+        os.makedirs(icons_dir, exist_ok=True)
+        os.makedirs(data_dir, exist_ok=True)
+        try:
+            with zipfile.ZipFile(io.BytesIO(content)) as zf:
+                names = [n for n in zf.namelist() if not n.endswith("/")]
+                # 兼容静态模式备份：根级 data.json + icons/*（图片以 DataURL 存在 uploads 里）
+                static_data = None
+                if "data.json" in names:
+                    try:
+                        with zf.open("data.json") as src:
+                            static_data = json.loads(src.read().decode("utf-8"))
+                    except Exception:
+                        static_data = None
+                if static_data is not None:
+                    # 覆盖式还原站点数据
+                    def _dump_json(path, obj):
+                        tmp = path + ".tmp"
+                        with open(tmp, "w", encoding="utf-8") as f:
+                            json.dump(obj, f, ensure_ascii=False, indent=2)
+                        os.replace(tmp, path)
+                    up = static_data.get("uploads") or []
+                    # 服务模式记录不需要 dataUrl（图片会从 icons/* 落盘）
+                    clean_up = []
+                    for u in up:
+                        item = {"name": u.get("name", ""), "category": u.get("category", "other")}
+                        if u.get("link"):
+                            item["link"] = u.get("link")
+                        if u.get("added_at"):
+                            item["added_at"] = u.get("added_at")
+                        clean_up.append(item)
+                    _dump_json(os.path.join(data_dir, "uploads.json"), {"uploads": clean_up})
+                    _dump_json(os.path.join(data_dir, "categories.json"), {"categories": static_data.get("categories") or []})
+                    st = static_data.get("settings") or {}
+                    settings_obj = {}
+                    if st.get("title"):
+                        settings_obj["title"] = st["title"][:60]
+                    if st.get("favicon"):
+                        settings_obj["favicon"] = st["favicon"][:500]
+                    if st.get("deleted_categories"):
+                        settings_obj["deleted_categories"] = st["deleted_categories"]
+                    if st.get("deleted_icons"):
+                        settings_obj["deleted_icons"] = st["deleted_icons"]
+                    if st.get("icon_moves") and isinstance(st["icon_moves"], dict):
+                        settings_obj["icon_moves"] = st["icon_moves"]
+                    _dump_json(os.path.join(data_dir, "settings.json"), settings_obj)
+                    # 图片文件：DataURL 转二进制落盘 icons/
+                    written = 0
+                    for u in up:
+                        data_url = u.get("dataUrl") or ""
+                        m = re.match(r"^data:([^;]+);base64,(.*)$", data_url, re.S)
+                        if not m:
+                            continue
+                        name = clean_filename(u.get("name") or "")
+                        if not name:
+                            continue
+                        import base64
+                        try:
+                            raw = base64.b64decode(m.group(2))
+                        except Exception:
+                            continue
+                        with open(os.path.join(icons_dir, name), "wb") as f:
+                            f.write(raw)
+                        written += 1
+                    self._json({"ok": True, "count": len(clean_up) + written, "static": True})
+                    return
+                # 服务模式备份格式：data/*.json + icons/*
+                valid = []
+                for n in names:
+                    parts = n.replace("\\", "/").split("/")
+                    if len(parts) == 2 and parts[0] == "icons":
+                        clean = clean_filename(parts[1])
+                        if clean:
+                            valid.append((n, os.path.join(icons_dir, clean)))
+                    elif len(parts) == 2 and parts[0] == "data" and parts[1].endswith(".json"):
+                        b = os.path.basename(parts[1])
+                        if b == parts[1] and b in ("uploads.json", "categories.json", "settings.json", "auth.json"):
+                            valid.append((n, os.path.join(data_dir, b)))
+                if not valid:
+                    self._err("备份文件内没有可恢复的图标或数据")
+                    return
+                for n, dst in valid:
+                    with zf.open(n) as src, open(dst, "wb") as out:
+                        out.write(src.read())
+        except zipfile.BadZipFile:
+            self._err("备份文件损坏或不是 ZIP")
+            return
+        self._json({"ok": True, "count": len(valid)})
 
     def _parse_multipart(self, body):
         """解析 multipart/form-data，返回 (files, fields)"""
