@@ -31,6 +31,7 @@ nginx 反代：见 README.md「用 nginx 反代上传服务」
     GET  /api/auth/check          校验登录状态（需 X-Auth-Token）
     POST /api/login               管理员登录（JSON：{username, password} → {token, username}）
     POST /api/change-password     修改密码（需登录，JSON：{old_password, new_password}）
+    POST /api/change-username     修改用户名（需登录，JSON：{new_username, password}）
     POST /api/upload              接收 multipart 上传（需登录；字段：file、category、link 可选）
     POST /api/categories          新增自定义分类（需登录，JSON：{"name": "分类名"}）
     POST /api/categories/delete   删除自定义分类并把其下上传图标移到 other（需登录）
@@ -130,6 +131,25 @@ class AuthStore:
         obj = self.load()
         obj[username] = {"salt": salt, "hash": hash_password(password, salt)}
         self._write(obj)
+
+    def rename(self, old_username, new_username, password):
+        """修改用户名：校验原密码后把账户迁移到新用户名（保留加盐哈希，旧键删除）"""
+        obj = self.load()
+        u = obj.get(old_username or "")
+        if not u:
+            return False, "用户不存在"
+        if u.get("hash") != hash_password(password or "", u.get("salt", "")):
+            return False, "密码不正确"
+        new_username = (new_username or "").strip()
+        if not new_username:
+            return False, "用户名不能为空"
+        if new_username != old_username and new_username in obj:
+            return False, "该用户名已存在"
+        obj[new_username] = u
+        if new_username != old_username:
+            obj.pop(old_username, None)
+        self._write(obj)
+        return True, ""
 
 
 class UploadsStore:
@@ -340,6 +360,14 @@ class Handler(SimpleHTTPRequestHandler):
             if data is not None:
                 self._handle_change_password(data)
             return
+        if path == "/api/change-username":
+            if not self._check_auth():
+                self._err("未登录或登录已过期，请重新登录", 401, "auth")
+                return
+            data = self._read_json()
+            if data is not None:
+                self._handle_change_username(data)
+            return
         if path == "/api/upload":
             if not self._check_auth():
                 self._err("未登录或登录已过期，请重新登录", 401, "auth")
@@ -404,6 +432,23 @@ class Handler(SimpleHTTPRequestHandler):
             return
         self.auth.set_password(username, new)
         self._json({"ok": True})
+
+    def _handle_change_username(self, data):
+        old_username = self._auth_user()
+        new_username = (data.get("new_username") or "").strip()
+        password = data.get("password") or ""
+        if not new_username:
+            self._err("用户名不能为空")
+            return
+        ok, err = self.auth.rename(old_username, new_username, password)
+        if not ok:
+            self._err(err, 401 if "密码" in err else 400)
+            return
+        # 更新本 token 的用户名映射，前端保持登录态
+        token = self.headers.get("X-Auth-Token", "")
+        if token in TOKENS:
+            TOKENS[token] = new_username
+        self._json({"ok": True, "username": new_username})
 
     # ---------- 上传 ----------
     def _handle_upload(self):
