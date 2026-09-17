@@ -128,6 +128,18 @@
   .card-copy:hover { border-color: var(--accent); }
   .card-copy svg { width: 14px; height: 14px; stroke: var(--muted); }
   .card-copy:hover svg { stroke: var(--accent); }
+  .card-del {
+    position: absolute; top: 8px; left: 8px;
+    width: 28px; height: 28px; border-radius: 8px;
+    background: var(--surface-2); border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; opacity: 0;
+    transition: opacity .15s, border-color .15s;
+  }
+  .card:hover .card-del, .card:focus-within .card-del { opacity: 1; }
+  .card-del:hover { border-color: #ff7b72; }
+  .card-del svg { width: 13px; height: 13px; stroke: var(--muted); }
+  .card-del:hover svg { stroke: #ff7b72; }
 
   .empty {
     grid-column: 1 / -1; text-align: center; padding: 70px 0; color: var(--muted);
@@ -282,6 +294,28 @@
     font-family: Consolas, "Cascadia Mono", monospace;
   }
 
+  /* ===== 分类管理（设置面板内） ===== */
+  .cat-input {
+    flex: 1; min-width: 0; padding: 9px 12px; margin-bottom: 0;
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px; font-size: 13px; outline: none;
+  }
+  .cat-input:focus { border-color: var(--accent); }
+  .cat-list { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+  .cat-item {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 6px 10px; font-size: 13px;
+  }
+  .cat-item .ci-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cat-item .ci-src { font-size: 11px; color: var(--muted); flex: none; }
+  .cat-item .ci-del {
+    background: none; border: none; color: var(--muted);
+    font-size: 16px; line-height: 1; cursor: pointer; padding: 2px 6px; flex: none;
+  }
+  .cat-item .ci-del:hover { color: #ff7b72; }
+  .cat-item .ci-del:disabled { opacity: .35; cursor: not-allowed; }
+
   /* ===== 移动端适配 ===== */
   @media (max-width: 640px) {
     .topbar-inner { padding: 12px 14px; }
@@ -364,6 +398,15 @@
       <button type="button" class="btn" id="settings-close">关闭</button>
     </div>
     <div class="upload-manage">
+      <h4>分类管理</h4>
+      <p class="um-tip">添加的分类立即可用；删除分类时，该分类下的上传图标会移到「其他」。data.js 基础分类需在 data.js 中管理。</p>
+      <div class="row">
+        <input type="text" class="cat-input" id="cat-input" placeholder="新分类名称" aria-label="新分类名称">
+        <button type="button" class="btn" id="cat-add" style="flex:none;padding:8px 14px;">添加</button>
+      </div>
+      <div id="cat-list" class="cat-list"></div>
+    </div>
+    <div class="upload-manage">
       <h4 id="upload-manage-title">上传的图标（0 个）</h4>
       <p class="um-tip" id="um-tip">上传的图标保存在当前浏览器本地。发布到 nginx / 外网前，请先「下载图片」放进项目 icons/ 目录，再把下方记录粘贴进 data.js，即可长期生效。</p>
       <div id="um-export">
@@ -413,6 +456,7 @@
   var state = { category: "all", keyword: "" };
   var BASE_KEY = "icons-home-baseurl";
   var UPLOADS_KEY = "icons-home-uploads";
+  var CATS_KEY = "icons-home-categories";
 
   var grid = document.getElementById("grid");
   var categoriesNav = document.getElementById("categories");
@@ -433,6 +477,8 @@
      双击本地 HTML（file://）打开时为 false，退回浏览器本地存储方案 */
   var SERVER_MODE = location.protocol === "http:" || location.protocol === "https:";
   var serverUploads = [];
+  /* 网页端自定义分类：服务模式存服务器 data/categories.json，静态模式存浏览器本地 */
+  var customCategories = [];
 
   /* ---------- 工具函数 ---------- */
   function el(tag, cls, text) {
@@ -464,6 +510,16 @@
   function saveUploads(list) {
     localStorage.setItem(UPLOADS_KEY, JSON.stringify(list));
   }
+  function loadCustomCats() {
+    try {
+      var raw = localStorage.getItem(CATS_KEY);
+      var arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr : [];
+    } catch (e) { return []; }
+  }
+  function saveCustomCats(list) {
+    localStorage.setItem(CATS_KEY, JSON.stringify(list));
+  }
   /* 页面显示的全部图标 = data.js 配置图标 + 上传的图标 */
   function allIcons() {
     var configured = (DATA.icons || []).map(function (ic) {
@@ -473,12 +529,12 @@
     if (SERVER_MODE) {
       /* 服务模式：上传的图片已写入服务器 icons/ 目录，直接按文件名渲染 */
       uploaded = serverUploads.map(function (u) {
-        return { name: u.name, category: u.category, file: u.name, link: "", desc: "网页上传", _src: "" };
+        return { name: u.name, category: u.category, file: u.name, link: "", desc: "网页上传", _src: "", _uploaded: true };
       });
     } else {
       /* 静态模式（file:// 双击打开）：图片以 DataURL 存在浏览器本地 */
       uploaded = loadUploads().map(function (u) {
-        return { name: u.name, category: u.category, file: u.name, link: "", desc: "本地上传", _src: u.dataUrl };
+        return { name: u.name, category: u.category, file: u.name, link: "", desc: "本地上传", _src: u.dataUrl, _uploaded: true };
       });
     }
     return configured.concat(uploaded);
@@ -528,8 +584,15 @@
       catOrder.push(c.id);
       catNames[c.id] = c.name;
     });
+    /* 网页端自定义分类（服务端 data/categories.json 或浏览器本地） */
+    customCategories.forEach(function (c) {
+      if (!(c.name in catNames)) {
+        catOrder.push(c.name);
+        catNames[c.name] = c.name;
+      }
+    });
     var all = allIcons();
-    /* 上传图标使用了 data.js 里没有的新分类时，自动追加到分类栏 */
+    /* 上传图标使用了上述分类里都没有的新分类时，自动追加到分类栏 */
     all.forEach(function (ic) {
       if (!(ic.category in catNames)) {
         catOrder.push(ic.category);
@@ -572,6 +635,11 @@
 
     document.getElementById("total-count").textContent = all.length;
 
+    /* 默认按显示名称排序：英文按字母，中文按拼音（zh-CN collation） */
+    matched.sort(function (a, b) {
+      return displayName(a).localeCompare(displayName(b), "zh-CN");
+    });
+
     if (!matched.length) {
       var empty = el("div", "empty");
       empty.appendChild(document.createTextNode("没有找到"));
@@ -608,6 +676,39 @@
       card.appendChild(img);
       card.appendChild(name);
       card.appendChild(copyBtn);
+
+      /* 网页上传的图标支持删除（服务模式删服务器文件+记录，静态模式删本地记录） */
+      if (ic._uploaded) {
+        var delBtn = el("button", "card-del");
+        delBtn.type = "button";
+        delBtn.setAttribute("aria-label", "删除 " + displayName(ic));
+        delBtn.title = "删除该图标";
+        delBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>';
+        delBtn.addEventListener("click", function (e) {
+          e.stopPropagation();
+          if (!window.confirm("确定删除图标「" + displayName(ic) + "」？该操作会删除服务器上对应的图片文件。")) return;
+          if (SERVER_MODE) {
+            fetch("api/delete", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ name: ic.file })
+            }).then(function (r) { return r.json(); }).then(function (res) {
+              if (res && res.ok) {
+                showToast("已删除图标，正在刷新…");
+                setTimeout(function () { location.reload(); }, 500);
+              } else {
+                showToast("删除失败：" + ((res && res.error) || "未知错误"));
+              }
+            }).catch(function () { showToast("无法连接服务，删除失败"); });
+          } else {
+            var up = loadUploads().filter(function (u) { return u.name !== ic.file; });
+            saveUploads(up);
+            showToast("已删除图标，正在刷新…");
+            setTimeout(function () { location.reload(); }, 500);
+          }
+        });
+        card.appendChild(delBtn);
+      }
 
       function openLink() {
         if (ic._src) {
@@ -671,6 +772,7 @@
     settingsPanel.classList.add("open");
     updatePreview();
     renderUploadManage();
+    renderCatManage();
     baseInput.focus();
     baseInput.select();
   }
@@ -702,7 +804,7 @@
   });
 
   /* ============================================================
-   * 上传弹窗：点击 / 拖拽选择图片 → 选择分类 → 提交到后端并刷新
+   * 上传弹窗：点击 / 拖拽选择图片 → 选择分类 → 保存到本地并刷新
    * ============================================================ */
   function openUpload() {
     uploadMask.classList.add("open");
@@ -771,11 +873,17 @@
 
       var sel = document.createElement("select");
       sel.setAttribute("aria-label", "选择分类：" + item.name);
-      (DATA.categories || []).forEach(function (c) {
+      /* 可选项 = data.js 基础分类 + 网页端自定义分类 */
+      var catOptions = (DATA.categories || []).map(function (c) {
+        return { value: c.id, name: c.name };
+      }).concat(customCategories.map(function (c) {
+        return { value: c.name, name: c.name };
+      }));
+      catOptions.forEach(function (co) {
         var o = document.createElement("option");
-        o.value = c.id;
-        o.textContent = c.name;
-        if (item.category === c.id) o.selected = true;
+        o.value = co.value;
+        o.textContent = co.name;
+        if (item.category === co.value) o.selected = true;
         sel.appendChild(o);
       });
       var newOpt = document.createElement("option");
@@ -954,6 +1062,119 @@
     setTimeout(function () { location.reload(); }, 500);
   });
 
+  /* ============================================================
+   * 分类管理（设置面板内）：添加 / 删除自定义分类
+   * ============================================================ */
+  /* 当前全部分类：data.js 基础 + 自定义 + 上传图标中出现的新分类 */
+  function effectiveCatList() {
+    var list = [];
+    (DATA.categories || []).forEach(function (c) {
+      list.push({ key: c.id, name: c.name, source: "基础" });
+    });
+    customCategories.forEach(function (c) {
+      if (!list.some(function (x) { return x.name === c.name; })) {
+        list.push({ key: c.name, name: c.name, source: "自定义" });
+      }
+    });
+    allIcons().forEach(function (ic) {
+      var hit = list.some(function (x) { return x.key === ic.category || x.name === ic.category; });
+      if (!hit) list.push({ key: ic.category, name: ic.category, source: "上传图标" });
+    });
+    return list;
+  }
+  function countInCategory(catKey) {
+    var n = 0;
+    allIcons().forEach(function (ic) {
+      if (ic.category === catKey) n++;
+    });
+    return n;
+  }
+  function renderCatManage() {
+    var box = document.getElementById("cat-list");
+    if (!box) return;
+    box.textContent = "";
+    effectiveCatList().forEach(function (c) {
+      var row = el("div", "cat-item");
+      var nm = el("span", "ci-name", c.name + "（" + countInCategory(c.key) + "）");
+      var src = el("span", "ci-src", c.source);
+      var del = el("button", "ci-del", "×");
+      del.type = "button";
+      del.title = c.source === "基础" ? "data.js 基础分类，请编辑 data.js 管理" : "删除分类";
+      del.disabled = c.source === "基础";
+      if (c.source !== "基础") {
+        del.addEventListener("click", function () {
+          var n = countInCategory(c.key);
+          var tip = n
+            ? "该分类下有 " + n + " 个图标，删除后这些图标会移到「其他」。确定删除分类「" + c.name + "」？"
+            : "确定删除分类「" + c.name + "」？";
+          if (!window.confirm(tip)) return;
+          if (SERVER_MODE) {
+            fetch("api/categories/delete", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ name: c.key })
+            }).then(function (r) { return r.json(); }).then(function (res) {
+              if (res && res.ok) {
+                customCategories = res.categories || [];
+                showToast("已删除分类，正在刷新…");
+                setTimeout(function () { location.reload(); }, 500);
+              } else {
+                showToast("删除失败：" + ((res && res.error) || "未知错误"));
+              }
+            }).catch(function () { showToast("无法连接服务，删除失败"); });
+          } else {
+            var cats = loadCustomCats().filter(function (x) { return x.name !== c.key; });
+            saveCustomCats(cats);
+            customCategories = cats;
+            var up = loadUploads().map(function (u) {
+              if (u.category === c.key) u.category = "other";
+              return u;
+            });
+            saveUploads(up);
+            showToast("已删除分类，正在刷新…");
+            setTimeout(function () { location.reload(); }, 500);
+          }
+        });
+      }
+      row.appendChild(nm);
+      row.appendChild(src);
+      row.appendChild(del);
+      box.appendChild(row);
+    });
+  }
+  document.getElementById("cat-add").addEventListener("click", function () {
+    var inp = document.getElementById("cat-input");
+    var name = inp.value.trim();
+    if (!name) { showToast("请输入分类名称"); return; }
+    var exists = (DATA.categories || []).some(function (c) { return c.name === name; }) ||
+                 customCategories.some(function (c) { return c.name === name; });
+    if (exists) { showToast("分类已存在：" + name); return; }
+    if (SERVER_MODE) {
+      fetch("api/categories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name })
+      }).then(function (r) { return r.json(); }).then(function (res) {
+        if (res && res.ok) {
+          showToast("已添加分类「" + name + "」，正在刷新…");
+          setTimeout(function () { location.reload(); }, 500);
+        } else {
+          showToast("添加失败：" + ((res && res.error) || "未知错误"));
+        }
+      }).catch(function () { showToast("无法连接服务，添加失败"); });
+    } else {
+      var cats = loadCustomCats();
+      cats.push({ name: name });
+      saveCustomCats(cats);
+      customCategories = cats;
+      showToast("已添加分类「" + name + "」，正在刷新…");
+      setTimeout(function () { location.reload(); }, 500);
+    }
+  });
+  document.getElementById("cat-input").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") document.getElementById("cat-add").click();
+  });
+
   /* ---------- 初始化 ---------- */
   var savedBase = "";
   try { savedBase = localStorage.getItem(BASE_KEY); } catch (e) {}
@@ -961,15 +1182,25 @@
   document.getElementById("site-title").textContent = DATA.title || "Icons Home";
   document.title = (DATA.title || "Icons Home") + " · 个人图标收藏";
 
-  /* 服务模式：拉取后端上传列表合并渲染；静态模式：保留「导出到 data.js」入口 */
+  /* 静态模式：从浏览器本地读取自定义分类 */
+  if (!SERVER_MODE) {
+    customCategories = loadCustomCats();
+  }
+
+  /* 服务模式：拉取后端上传列表与自定义分类，合并渲染；静态模式：保留「导出到 data.js」入口 */
   if (SERVER_MODE) {
     document.getElementById("um-tip").textContent = "已连接后端服务：上传的图片直接保存到服务器项目 icons/ 目录，记录写入 data/uploads.json，所有访问者刷新后即可看到。";
     document.getElementById("um-export").style.display = "none";
-    fetch("api/uploads", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (d) {
-      if (d && d.ok && Array.isArray(d.uploads)) serverUploads = d.uploads;
+    Promise.all([
+      fetch("api/uploads", { cache: "no-store" }).then(function (r) { return r.json(); }).catch(function () { return {}; }),
+      fetch("api/categories", { cache: "no-store" }).then(function (r) { return r.json(); }).catch(function () { return {}; })
+    ]).then(function (rs) {
+      if (rs[0] && rs[0].ok && Array.isArray(rs[0].uploads)) serverUploads = rs[0].uploads;
+      if (rs[1] && rs[1].ok && Array.isArray(rs[1].categories)) customCategories = rs[1].categories;
       renderCategories();
       renderGrid();
       renderUploadManage();
+      renderCatManage();
     }).catch(function () { /* 后端暂不可用：仅显示 data.js 配置图标 */ });
   }
 

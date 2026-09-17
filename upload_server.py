@@ -20,8 +20,12 @@ Docker 部署：见 docker-compose.yml（docker compose up -d）
 nginx 反代：见 README.md「用 nginx 反代上传服务」
 
 接口：
-    GET  /api/uploads   返回已上传图标记录（页面渲染时合并到图标列表）
-    POST /api/upload    接收 multipart 上传（字段：file=图片文件、category=分类名）
+    GET  /api/uploads           返回已上传图标记录（页面渲染时合并到图标列表）
+    GET  /api/categories        返回网页端自定义分类（data/categories.json）
+    POST /api/upload            接收 multipart 上传（字段：file=图片文件、category=分类名）
+    POST /api/categories        新增自定义分类（JSON：{"name": "分类名"}）
+    POST /api/categories/delete 删除自定义分类，并把该分类下的上传图标移到 other（JSON：{"name": "分类名"}）
+    POST /api/delete            删除网页上传的图标：删 icons/ 文件 + uploads 记录（JSON：{"name": "文件名"}）
 """
 import email
 import json
@@ -101,13 +105,74 @@ class UploadsStore:
         self._write(records)
         return records
 
+    def remove(self, name):
+        """删除指定文件名的记录，返回最新列表"""
+        records = [r for r in self.load() if r.get("name") != name]
+        self._write(records)
+        return records
+
+    def move_category(self, old_name, new_name):
+        """把某分类下的记录改到另一分类，返回最新列表"""
+        records = [dict(r) for r in self.load()]
+        changed = False
+        for r in records:
+            if r.get("category") == old_name:
+                r["category"] = new_name
+                changed = True
+        if changed:
+            self._write(records)
+        return records
+
+
+class CategoriesStore:
+    """data/categories.json：网页端自定义分类（以 name 为唯一标识）"""
+
+    def __init__(self, data_dir):
+        self.path = os.path.join(data_dir, "categories.json")
+        os.makedirs(data_dir, exist_ok=True)
+        if not os.path.exists(self.path):
+            self._write([])
+
+    def _write(self, records):
+        tmp = self.path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"categories": records}, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, self.path)
+
+    def load(self):
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict) and isinstance(data.get("categories"), list):
+                return data["categories"]
+        except Exception:
+            pass
+        return []
+
+    def has(self, name):
+        return any(c.get("name") == name for c in self.load())
+
+    def add(self, name):
+        records = self.load()
+        if not any(c.get("name") == name for c in records):
+            records.append({"name": name})
+            self._write(records)
+        return records
+
+    def remove(self, name):
+        records = [c for c in self.load() if c.get("name") != name]
+        self._write(records)
+        return records
+
 
 class Handler(SimpleHTTPRequestHandler):
-    """静态托管 + GET /api/uploads + POST /api/upload"""
+    """静态托管 + 上传 / 分类管理 / 图标删除 API"""
 
     def __init__(self, *args, **kwargs):
         kwargs["directory"] = ARGS["dir"]
-        self.store = UploadsStore(os.path.join(ARGS["dir"], "data"))
+        data_dir = os.path.join(ARGS["dir"], "data")
+        self.store = UploadsStore(data_dir)
+        self.categories = CategoriesStore(data_dir)
         super().__init__(*args, **kwargs)
 
     # ---------- 响应工具 ----------
@@ -124,16 +189,50 @@ class Handler(SimpleHTTPRequestHandler):
 
     # ---------- GET ----------
     def do_GET(self):
-        if self.path.split("?")[0] == "/api/uploads":
+        path = self.path.split("?")[0]
+        if path == "/api/uploads":
             self._json({"ok": True, "uploads": self.store.load()})
+            return
+        if path == "/api/categories":
+            self._json({"ok": True, "categories": self.categories.load()})
             return
         super().do_GET()
 
     # ---------- POST ----------
     def do_POST(self):
-        if self.path.split("?")[0] != "/api/upload":
-            self._err("未知接口", 404)
+        path = self.path.split("?")[0]
+        if path == "/api/upload":
+            self._handle_upload()
             return
+        if path in ("/api/categories", "/api/categories/delete", "/api/delete"):
+            data = self._read_json()
+            if data is None:
+                return
+            if path == "/api/categories":
+                self._handle_add_category(data)
+            elif path == "/api/categories/delete":
+                self._handle_delete_category(data)
+            else:
+                self._handle_delete_icon(data)
+            return
+        self._err("未知接口", 404)
+
+    def _read_json(self):
+        """读取并解析 JSON 请求体，失败返回 None（已回错误响应）"""
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        if length <= 0 or length > MAX_BODY:
+            self._err("请求体无效")
+            return None
+        try:
+            return json.loads(self.rfile.read(length).decode("utf-8"))
+        except Exception:
+            self._err("请求体不是有效 JSON")
+            return None
+
+    def _handle_upload(self):
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
@@ -170,6 +269,46 @@ class Handler(SimpleHTTPRequestHandler):
         for name in saved:
             self.store.upsert(name, category)
         self._json({"ok": True, "count": len(saved), "files": saved})
+
+    def _handle_add_category(self, data):
+        name = (data.get("name") or "").strip()
+        if not name:
+            self._err("分类名称不能为空")
+            return
+        if self.categories.has(name):
+            self._err("分类已存在：" + name)
+            return
+        self.categories.add(name)
+        self._json({"ok": True, "categories": self.categories.load()})
+
+    def _handle_delete_category(self, data):
+        name = (data.get("name") or "").strip()
+        if not name:
+            self._err("分类名称不能为空")
+            return
+        if name == "other":
+            self._err("「其他」是兜底分类，不能删除")
+            return
+        # 该分类下的上传图标移到 other
+        self.store.move_category(name, "other")
+        # 移除自定义分类记录（不在记录里则无操作）
+        self.categories.remove(name)
+        self._json({"ok": True, "categories": self.categories.load(), "uploads": self.store.load()})
+
+    def _handle_delete_icon(self, data):
+        name = clean_filename(data.get("name") or "")
+        if not name:
+            self._err("文件名无效")
+            return
+        records = self.store.load()
+        if not any(r.get("name") == name for r in records):
+            self._err("该图标不是网页上传的图标（基础图标请在 data.js 中管理）")
+            return
+        fpath = os.path.join(ARGS["dir"], "icons", name)
+        if os.path.isfile(fpath):
+            os.remove(fpath)
+        self.store.remove(name)
+        self._json({"ok": True})
 
     def _parse_multipart(self, body):
         """解析 multipart/form-data，返回 (files, fields)"""
