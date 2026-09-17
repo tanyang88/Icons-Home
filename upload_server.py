@@ -22,16 +22,19 @@ nginx 反代：见 README.md「用 nginx 反代上传服务」
 接口：
     GET  /api/uploads           返回已上传图标记录（页面渲染时合并到图标列表）
     GET  /api/categories        返回网页端自定义分类（data/categories.json）
-    POST /api/upload            接收 multipart 上传（字段：file=图片文件、category=分类名）
+    GET  /api/settings          返回站点设置（标题、隐藏的分类/图标，data/settings.json）
+    POST /api/upload            接收 multipart 上传（字段：file=图片文件、category=分类名、link=自定义跳转链接可选）
     POST /api/categories        新增自定义分类（JSON：{"name": "分类名"}）
     POST /api/categories/delete 删除自定义分类，并把该分类下的上传图标移到 other（JSON：{"name": "分类名"}）
     POST /api/delete            删除网页上传的图标：删 icons/ 文件 + uploads 记录（JSON：{"name": "文件名"}）
+    POST /api/settings          更新站点设置（JSON：{title?, deleted_categories?, deleted_icons?}）
 """
 import email
 import json
 import os
 import re
 import sys
+import time
 from email import policy
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
@@ -98,10 +101,10 @@ class UploadsStore:
             pass
         return []
 
-    def upsert(self, name, category):
-        """新增或覆盖同名记录，返回最新列表"""
+    def upsert(self, name, category, link=""):
+        """新增或覆盖同名记录（含自定义链接与添加时间），返回最新列表"""
         records = [r for r in self.load() if r.get("name") != name]
-        records.append({"name": name, "category": category})
+        records.append({"name": name, "category": category, "link": link, "added_at": time.time()})
         self._write(records)
         return records
 
@@ -165,14 +168,47 @@ class CategoriesStore:
         return records
 
 
+class SettingsStore:
+    """data/settings.json：站点级设置（标题、隐藏的分类/图标）"""
+
+    def __init__(self, data_dir):
+        self.path = os.path.join(data_dir, "settings.json")
+        os.makedirs(data_dir, exist_ok=True)
+        if not os.path.exists(self.path):
+            self._write({})
+
+    def _write(self, obj):
+        tmp = self.path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(obj, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, self.path)
+
+    def load(self):
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+        return {}
+
+    def update(self, patch):
+        obj = self.load()
+        obj.update(patch)
+        self._write(obj)
+        return obj
+
+
 class Handler(SimpleHTTPRequestHandler):
-    """静态托管 + 上传 / 分类管理 / 图标删除 API"""
+    """静态托管 + 上传 / 分类管理 / 图标删除 / 站点设置 API"""
 
     def __init__(self, *args, **kwargs):
         kwargs["directory"] = ARGS["dir"]
         data_dir = os.path.join(ARGS["dir"], "data")
         self.store = UploadsStore(data_dir)
         self.categories = CategoriesStore(data_dir)
+        self.settings = SettingsStore(data_dir)
         super().__init__(*args, **kwargs)
 
     # ---------- 响应工具 ----------
@@ -196,6 +232,9 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/categories":
             self._json({"ok": True, "categories": self.categories.load()})
             return
+        if path == "/api/settings":
+            self._json({"ok": True, "settings": self.settings.load()})
+            return
         super().do_GET()
 
     # ---------- POST ----------
@@ -204,7 +243,7 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/upload":
             self._handle_upload()
             return
-        if path in ("/api/categories", "/api/categories/delete", "/api/delete"):
+        if path in ("/api/categories", "/api/categories/delete", "/api/delete", "/api/settings"):
             data = self._read_json()
             if data is None:
                 return
@@ -212,8 +251,10 @@ class Handler(SimpleHTTPRequestHandler):
                 self._handle_add_category(data)
             elif path == "/api/categories/delete":
                 self._handle_delete_category(data)
-            else:
+            elif path == "/api/delete":
                 self._handle_delete_icon(data)
+            else:
+                self._handle_update_settings(data)
             return
         self._err("未知接口", 404)
 
@@ -266,8 +307,9 @@ class Handler(SimpleHTTPRequestHandler):
             return
 
         category = (fields.get("category") or "other").strip() or "other"
+        link = (fields.get("link") or "").strip()[:500]
         for name in saved:
-            self.store.upsert(name, category)
+            self.store.upsert(name, category, link)
         self._json({"ok": True, "count": len(saved), "files": saved})
 
     def _handle_add_category(self, data):
@@ -309,6 +351,33 @@ class Handler(SimpleHTTPRequestHandler):
             os.remove(fpath)
         self.store.remove(name)
         self._json({"ok": True})
+
+    def _handle_update_settings(self, data):
+        """更新站点设置：标题 / 隐藏的基础分类 / 隐藏的基础图标（全量替换列表）"""
+        patch = {}
+        if "title" in data:
+            t = (data.get("title") or "").strip()
+            if len(t) > 60:
+                self._err("标题过长（最多 60 字符）")
+                return
+            patch["title"] = t
+        if "deleted_categories" in data:
+            cats = [str(x).strip() for x in (data.get("deleted_categories") or [])]
+            cats = [c for c in cats if c]
+            if "other" in cats:
+                self._err("「其他」是兜底分类，不能删除")
+                return
+            patch["deleted_categories"] = cats
+        if "deleted_icons" in data:
+            icons = [clean_filename(str(x)) for x in (data.get("deleted_icons") or [])]
+            icons = [i for i in icons if i]
+            # 去重保序
+            patch["deleted_icons"] = list(dict.fromkeys(icons))
+        if not patch:
+            self._err("没有可更新的字段")
+            return
+        self.settings.update(patch)
+        self._json({"ok": True, "settings": self.settings.load()})
 
     def _parse_multipart(self, body):
         """解析 multipart/form-data，返回 (files, fields)"""
