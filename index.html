@@ -62,7 +62,7 @@
     display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
   }
   .brand { display: flex; align-items: center; gap: 10px; margin-right: auto; }
-  .brand-logo { width: 34px; height: 34px; flex: none; }
+  .brand-logo { width: 34px; height: 34px; flex: none; border-radius: 8px; object-fit: contain; background: var(--surface); }
   .brand-title { font-size: 18px; font-weight: 700; letter-spacing: .02em; }
   .brand-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
   .toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -176,6 +176,18 @@
   .card-del:hover { border-color: #ff7b72; }
   .card-del svg { width: 13px; height: 13px; stroke: var(--muted); }
   .card-del:hover svg { stroke: #ff7b72; }
+  .card-preview {
+    position: absolute; bottom: 8px; right: 8px;
+    width: 28px; height: 28px; border-radius: 8px;
+    background: var(--surface-2); border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; opacity: 0;
+    transition: opacity .15s, border-color .15s;
+  }
+  .card:hover .card-preview, .card:focus-within .card-preview { opacity: 1; }
+  .card-preview:hover { border-color: var(--accent); }
+  .card-preview svg { width: 14px; height: 14px; stroke: var(--muted); }
+  .card-preview:hover svg { stroke: var(--accent); }
 
   .empty {
     grid-column: 1 / -1; text-align: center; padding: 70px 0; color: var(--muted);
@@ -209,6 +221,8 @@
   }
   .settings-panel input[type="text"]:focus { border-color: var(--accent); }
   .settings-panel .row { display: flex; gap: 8px; align-items: center; }
+  /* 修正 row 内输入框与按钮不对齐：输入框自带 margin-bottom:12px，在 flex 行内需清零 */
+  .settings-panel .row .cat-input { margin-bottom: 0; }
   .settings-panel .btn {
     flex: 1; height: 38px; padding: 0 12px; text-align: center; cursor: pointer;
     border: 1px solid var(--border); border-radius: 8px;
@@ -318,6 +332,23 @@
     font-size: 18px; line-height: 1; cursor: pointer; padding: 4px 6px;
   }
   .fi-del:hover { color: #ff7b72; }
+  /* 图标预览弹窗 */
+  .preview-wrap { width: min(860px, 94vw); max-width: 100%; max-height: 90vh; }
+  .preview-body {
+    padding: 14px; overflow: auto; display: flex; align-items: flex-start; justify-content: center;
+    min-height: 120px; background: var(--bg);
+  }
+  .preview-body img { max-width: none; display: block; }
+  .preview-tools { display: flex; align-items: center; gap: 6px; }
+  .preview-zoom {
+    width: 30px; height: 30px; border-radius: 8px;
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--border); cursor: pointer; font-size: 16px; line-height: 1;
+  }
+  .preview-zoom:hover { border-color: var(--accent); color: var(--accent); }
+  .preview-zoom:disabled { opacity: .4; cursor: not-allowed; }
+  .preview-scale { font-size: 12px; color: var(--muted); min-width: 44px; text-align: center; }
+  .preview-note { padding: 8px 14px 4px; font-size: 12px; color: var(--muted); }
   .modal-foot {
     display: flex; justify-content: flex-end; gap: 10px;
     padding: 14px 20px; border-top: 1px solid var(--border);
@@ -356,6 +387,15 @@
     background: var(--surface); border: 1px solid var(--border);
     border-radius: 8px; padding: 6px 10px; font-size: 13px;
   }
+  .cat-item .ci-grip {
+    flex: none; color: var(--muted); cursor: grab;
+    display: inline-flex; align-items: center; padding: 2px; border-radius: 4px;
+    touch-action: none;
+  }
+  .cat-item .ci-grip:hover { background: var(--accent-soft); color: var(--accent); }
+  .cat-item .ci-grip svg { width: 14px; height: 14px; stroke: currentColor; }
+  .cat-item.dragging { opacity: .45; border-style: dashed; }
+  .cat-list.drag-over { outline: 1px dashed var(--accent); outline-offset: 3px; border-radius: 6px; }
   .cat-item .ci-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .cat-item .ci-src { font-size: 11px; color: var(--muted); flex: none; }
   .cat-item .ci-del {
@@ -455,14 +495,7 @@
   <header class="topbar">
     <div class="topbar-inner">
       <div class="brand">
-        <svg class="brand-logo" viewBox="0 0 64 64" aria-hidden="true">
-          <rect width="64" height="64" rx="14" fill="#1c2638"/>
-          <rect x="12" y="12" width="40" height="40" rx="9" fill="#ffb454"/>
-          <rect x="21" y="21" width="9" height="9" rx="2" fill="#161e2e"/>
-          <rect x="34" y="21" width="9" height="9" rx="2" fill="#161e2e"/>
-          <rect x="21" y="34" width="9" height="9" rx="2" fill="#161e2e"/>
-          <rect x="34" y="34" width="9" height="9" rx="2" fill="#161e2e"/>
-        </svg>
+        <img class="brand-logo" id="brand-logo" alt="" aria-hidden="true">
         <div>
           <div class="brand-title" id="site-title">Icons Home</div>
           <div class="brand-sub">个人图标收藏 · 点击图标复制链接，悬停右上角可打开跳转链接</div>
@@ -559,8 +592,8 @@
       </div>
     </div>
     <div class="upload-manage">
-      <h4>网站图标（favicon）</h4>
-      <p class="um-tip">填写图标 URL，或选择本地图片自动转为地址；保存后浏览器标签页图标即更新。</p>
+      <h4>网站图标</h4>
+      <p class="um-tip">填写图标 URL，或选择本地图片自动转为地址；保存后左上角站点图标与浏览器标签页图标（favicon）同时更新。</p>
       <div class="row">
         <input type="text" class="cat-input" id="favicon-input" placeholder="图标 URL 或选择本地图片">
         <button type="button" class="btn" id="favicon-pick" style="flex:none;padding:8px 12px;">选择图片</button>
@@ -613,9 +646,9 @@
       <div class="modal-body">
         <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="选择文件或拖拽图片到此处">
           <div class="dz-main">点击选择文件，或把图片<b>拖拽到这里</b></div>
-          <div>支持 png / jpg / webp / svg / gif，可一次多选</div>
+          <div>支持 png / jpg / jpeg / webp / svg / gif / ico / bmp / icns，可一次多选</div>
         </div>
-        <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp,image/svg+xml,image/gif" multiple hidden>
+        <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp,image/svg+xml,image/gif,image/x-icon,image/vnd.microsoft.icon,image/bmp,image/icns,image/jpg" multiple hidden>
         <div class="file-list" id="file-list"></div>
       </div>
       <div class="modal-foot">
@@ -627,6 +660,26 @@
 
   <!-- ===== 提示气泡 ===== -->
   <div class="toast" id="toast" role="status"></div>
+
+  <!-- ===== 图标预览弹窗 ===== -->
+  <div class="modal-mask" id="preview-mask">
+    <div class="modal preview-wrap" role="dialog" aria-label="图标预览">
+      <div class="modal-head">
+        <h3 id="preview-title">图标预览</h3>
+        <div class="preview-tools">
+          <button type="button" class="preview-zoom" id="preview-zoom-out" aria-label="缩小" title="缩小">−</button>
+          <span class="preview-scale" id="preview-scale">100%</span>
+          <button type="button" class="preview-zoom" id="preview-zoom-in" aria-label="放大" title="放大">+</button>
+          <button type="button" class="preview-zoom" id="preview-fit" aria-label="适应窗口" title="适应窗口">⤢</button>
+          <button type="button" class="modal-close" id="preview-close" aria-label="关闭">×</button>
+        </div>
+      </div>
+      <div class="preview-body" id="preview-body">
+        <img id="preview-img" alt="图标预览">
+      </div>
+      <div class="preview-note" id="preview-note">滚轮或按钮可缩放；默认 100% 原始尺寸</div>
+    </div>
+  </div>
 
   <!-- ===== 登录弹窗 ===== -->
   <div class="modal-mask" id="login-mask">
@@ -683,6 +736,7 @@
   var PASSWD_KEY = "icons-home-passwd";
   var MOVES_KEY = "icons-home-icon-moves";
   var FAVICON_KEY = "icons-home-favicon";
+  var CAT_ORDER_KEY = "icons-home-cat-order";
 
   var grid = document.getElementById("grid");
   var categoriesNav = document.getElementById("categories");
@@ -719,13 +773,20 @@
   /* 网页端自定义分类：服务模式存服务器 data/categories.json，静态模式存浏览器本地 */
   var customCategories = [];
   /* 站点设置（服务模式从服务器 data/settings.json 读取；静态模式存浏览器本地） */
-  var settings = { title: "", deleted_categories: [], deleted_icons: [], icon_moves: {}, favicon: "" };
+  var settings = { title: "", deleted_categories: [], deleted_icons: [], icon_moves: {}, favicon: "", category_order: [] };
   var hiddenCats = [];
   var hiddenIcons = [];
   var iconMoves = {};
+  /* 分类顺序：有效分类 key 的有序列表（服务模式存服务器 settings.category_order；静态模式存浏览器本地） */
+  var categoryOrder = [];
   /* 管理员登录状态：服务模式 {token, username}；静态模式 {username, logged} */
   var auth = null;
   var DEFAULT_FAVICON = document.getElementById("site-favicon").href;
+  /* 左上角站点图标与 favicon 联动：初始使用默认图标 */
+  (function () {
+    var logo = document.getElementById("brand-logo");
+    if (logo) logo.src = DEFAULT_FAVICON;
+  })();
 
   /* ---------- 外观主题（日间 / 夜间 / 跟随系统） ---------- */
   var savedTheme = "auto";
@@ -746,11 +807,13 @@
     else if (sysMq.addListener) sysMq.addListener(onSysTheme);
   }
 
-  /* ---------- 网站图标（favicon）应用 ---------- */
+  /* ---------- 网站图标应用：同时更新左上角站点图标与浏览器标签页 favicon ---------- */
   function applyFavicon(u) {
     var link = document.getElementById("site-favicon");
-    if (!link) return;
-    link.href = (u && u.trim()) ? u.trim() : DEFAULT_FAVICON;
+    var src = (u && u.trim()) ? u.trim() : DEFAULT_FAVICON;
+    if (link) link.href = src;
+    var logo = document.getElementById("brand-logo");
+    if (logo) logo.src = src;
   }
 
   /* ---------- 管理员登录（未登录仅可浏览与复制链接，登录后全部操作） ---------- */
@@ -868,6 +931,30 @@
     return node;
   }
 
+  /* 图片格式白名单（前端校验；服务端另有 ALLOWED_EXTS） */
+  var ALLOW_EXT = ["png", "jpg", "jpeg", "webp", "svg", "gif", "ico", "bmp", "icns"];
+  function extOf(name) {
+    var m = /\.([^.]+)$/.exec(name || "");
+    return m ? m[1].toLowerCase() : "";
+  }
+  function isAllowedImage(file) {
+    var ext = extOf(file && file.name);
+    if (ALLOW_EXT.indexOf(ext) !== -1) return true;
+    return /^image\//.test((file && file.type) || "");
+  }
+
+  /* 分类归一：兼容历史数组数据（多分类时期上传的记录），统一取单个分类 */
+  function toCats(cat) {
+    if (Array.isArray(cat)) return cat.filter(Boolean).filter(function (v, i, a) { return a.indexOf(v) === i; });
+    if (typeof cat === "string" && cat.trim()) return [cat.trim()];
+    return ["other"];
+  }
+  /* 归一为单个分类（数组取第一个，兼容多分类时期的历史数据） */
+  function singleCat(ic) {
+    var cats = toCats(ic && ic.category);
+    return cats[0];
+  }
+
   function iconUrl(icon) {
     var base = baseInput.value.trim();
     var path = "icons/" + icon.file;
@@ -918,6 +1005,7 @@
       if ("deleted_categories" in patch) localStorage.setItem(HIDDEN_CATS_KEY, JSON.stringify(patch.deleted_categories));
       if ("deleted_icons" in patch) localStorage.setItem(HIDDEN_ICONS_KEY, JSON.stringify(patch.deleted_icons));
       if ("icon_moves" in patch) localStorage.setItem(MOVES_KEY, JSON.stringify(patch.icon_moves));
+      if ("category_order" in patch) localStorage.setItem(CAT_ORDER_KEY, JSON.stringify(patch.category_order));
     } catch (e) {}
     return Promise.resolve(true);
   }
@@ -927,34 +1015,41 @@
       hiddenCats = settings.deleted_categories || [];
       hiddenIcons = settings.deleted_icons || [];
       iconMoves = settings.icon_moves || {};
+      categoryOrder = settings.category_order || [];
     } else {
       try { hiddenCats = JSON.parse(localStorage.getItem(HIDDEN_CATS_KEY) || "[]"); } catch (e) { hiddenCats = []; }
       try { hiddenIcons = JSON.parse(localStorage.getItem(HIDDEN_ICONS_KEY) || "[]"); } catch (e) { hiddenIcons = []; }
       try { iconMoves = JSON.parse(localStorage.getItem(MOVES_KEY) || "{}"); } catch (e) { iconMoves = {}; }
+      try { categoryOrder = JSON.parse(localStorage.getItem(CAT_ORDER_KEY) || "[]"); } catch (e) { categoryOrder = []; }
     }
   }
-  /* 页面显示的全部图标 = data.js 配置图标 + 上传的图标
+  /* 页面显示的全部图标 = data.js 配置图标 + 上传的图标（category 为单个分类）
      基础分类被隐藏时其图标归入「其他」；基础图标被隐藏时不再显示 */
   function allIcons() {
     var configured = (DATA.icons || []).map(function (ic, idx) {
       if (hiddenIcons.indexOf(ic.file) !== -1) return null;
-      var cat = hiddenCats.indexOf(ic.category) !== -1 ? "other" : ic.category;
+      var cat = singleCat(ic);
+      /* 基础图标的移动记录：替换为该分类 */
       if (iconMoves[ic.file]) cat = iconMoves[ic.file];
+      /* 被隐藏的分类归入「其他」 */
+      if (hiddenCats.indexOf(cat) !== -1) cat = "other";
       return { name: ic.name, category: cat, file: ic.file, link: ic.link, desc: ic.desc, _src: "", _uploaded: false, _base: true, added_at: ic.added_at || idx };
     }).filter(Boolean);
     var uploaded;
     if (SERVER_MODE) {
       /* 服务模式：上传的图片已写入服务器 icons/ 目录，直接按文件名渲染 */
       uploaded = serverUploads.map(function (u) {
-        var cat = hiddenCats.indexOf(u.category) !== -1 ? "other" : u.category;
+        var cat = singleCat(u);
         if (iconMoves[u.name]) cat = iconMoves[u.name];
+        if (hiddenCats.indexOf(cat) !== -1) cat = "other";
         return { name: u.name, category: cat, file: u.name, link: u.link || "", desc: "网页上传", _src: "", _uploaded: true, added_at: u.added_at || 0 };
       });
     } else {
       /* 静态模式（file:// 双击打开）：图片以 DataURL 存在浏览器本地 */
       uploaded = loadUploads().map(function (u) {
-        var cat = hiddenCats.indexOf(u.category) !== -1 ? "other" : u.category;
+        var cat = singleCat(u);
         if (iconMoves[u.name]) cat = iconMoves[u.name];
+        if (hiddenCats.indexOf(cat) !== -1) cat = "other";
         return { name: u.name, category: cat, file: u.name, link: u.link || "", desc: "本地上传", _src: u.dataUrl, _uploaded: true, added_at: u.added_at || 0 };
       });
     }
@@ -1022,6 +1117,20 @@
         catNames[ic.category] = ic.category;
       }
     });
+    /* 应用用户自定义的分类顺序（categoryOrder 优先，未提及的分类按原顺序排在后面） */
+    if (categoryOrder && categoryOrder.length) {
+      var byId = {};
+      catOrder.forEach(function (id) { byId[id] = true; });
+      var ordered = [];
+      var seen = {};
+      categoryOrder.forEach(function (id) {
+        if (byId[id] && !seen[id]) { ordered.push(id); seen[id] = 1; }
+      });
+      catOrder.forEach(function (id) {
+        if (!seen[id]) { ordered.push(id); seen[id] = 1; }
+      });
+      catOrder = ordered;
+    }
     var list = [{ id: "all", name: "全部" }].concat(catOrder.map(function (id) {
       return { id: id, name: catNames[id] };
     }));
@@ -1112,6 +1221,18 @@
         linkBtn.title = "打开跳转链接";
         linkBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>';
         card.appendChild(linkBtn);
+
+        /* 预览按钮：右下角放大镜，点击弹出图片预览窗口 */
+        var previewBtn = el("button", "card-preview");
+        previewBtn.type = "button";
+        previewBtn.setAttribute("aria-label", "预览 " + displayName(ic));
+        previewBtn.title = "预览图标";
+        previewBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>';
+        previewBtn.addEventListener("click", function (e) {
+          e.stopPropagation();
+          openPreview(ic);
+        });
+        card.appendChild(previewBtn);
 
         /* 删除按钮（仅管理员可见）：上传图标真删（服务模式删服务器文件+记录），data.js 基础图标隐藏 */
         if (isAdmin()) {
@@ -1204,6 +1325,77 @@
       return dir * r;
     });
   }
+
+  /* ---------- 图标预览：放大镜按钮 → 弹出预览窗口（默认原始尺寸，可缩放） ---------- */
+  var previewMask = document.getElementById("preview-mask");
+  var previewImg = document.getElementById("preview-img");
+  var previewScaleEl = document.getElementById("preview-scale");
+  var previewNote = document.getElementById("preview-note");
+  var previewScale = 1;
+  var previewFitBase = 1;
+  function openPreview(ic) {
+    var src = iconSrc(ic);
+    previewScale = 1;
+    previewScaleEl.textContent = "100%";
+    previewNote.textContent = "滚轮或按钮可缩放；默认 100% 原始尺寸";
+    previewImg.onload = function () {
+      /* 记录「适应窗口」基准比例 = 容器可容纳的最大宽度 / 图片原始宽度 */
+      var body = document.getElementById("preview-body");
+      var avail = Math.max(body.clientWidth - 4, 80);
+      previewFitBase = Math.min(1, avail / (previewImg.naturalWidth || avail));
+      applyPreviewScale();
+      previewMask.classList.add("open");
+      document.body.style.overflow = "hidden";
+      previewImg.focus();
+    };
+    previewImg.onerror = function () {
+      previewMask.classList.add("open");
+      document.body.style.overflow = "hidden";
+      previewNote.textContent = "该图片格式当前浏览器无法预览（如 .icns），可下载后本地查看";
+      previewImg.style.width = "auto";
+      previewImg.style.maxWidth = "100%";
+    };
+    previewImg.src = src;
+  }
+  function applyPreviewScale() {
+    var w = (previewImg.naturalWidth || 0) * previewScale;
+    previewImg.style.width = (w > 0 ? w : 100) + "px";
+    previewImg.style.height = "auto";
+    previewImg.style.maxWidth = "none";
+    previewScaleEl.textContent = Math.round(previewScale * 100) + "%";
+    var out = document.getElementById("preview-zoom-out");
+    var inn = document.getElementById("preview-zoom-in");
+    if (out) out.disabled = previewScale <= 0.05;
+    if (inn) inn.disabled = previewScale >= 20;
+  }
+  function closePreview() {
+    previewMask.classList.remove("open");
+    document.body.style.overflow = "";
+    previewImg.removeAttribute("src");
+  }
+  document.getElementById("preview-close").addEventListener("click", closePreview);
+  document.getElementById("preview-zoom-out").addEventListener("click", function () {
+    previewScale = Math.max(0.05, previewScale / 1.25);
+    applyPreviewScale();
+  });
+  document.getElementById("preview-zoom-in").addEventListener("click", function () {
+    previewScale = Math.min(20, previewScale * 1.25);
+    applyPreviewScale();
+  });
+  document.getElementById("preview-fit").addEventListener("click", function () {
+    previewScale = previewFitBase || 1;
+    applyPreviewScale();
+  });
+  previewMask.addEventListener("click", function (e) { if (e.target === previewMask) closePreview(); });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && previewMask.classList.contains("open")) closePreview();
+  });
+  previewImg.addEventListener("wheel", function (e) {
+    e.preventDefault();
+    var factor = e.deltaY < 0 ? 1.1 : 0.9;
+    previewScale = Math.min(20, Math.max(0.05, previewScale * factor));
+    applyPreviewScale();
+  }, { passive: false });
 
   /* ---------- 搜索 ---------- */
   searchInput.addEventListener("input", function () {
@@ -1438,11 +1630,11 @@
   function addUploadFiles(list) {
     var added = 0;
     Array.prototype.forEach.call(list, function (f) {
-      if (!/^image\//.test(f.type)) {
-        showToast("已跳过非图片文件：" + f.name);
+      if (!isAllowedImage(f)) {
+        showToast("已跳过不支持的格式：" + f.name + "（支持 png / jpg / jpeg / webp / svg / gif / ico / bmp / icns）");
         return;
       }
-      uploadQueue.push({ file: f, name: f.name, category: "", size: f.size });
+      uploadQueue.push({ file: f, name: f.name, cats: [], size: f.size });
       added++;
     });
     if (added) {
@@ -1608,7 +1800,7 @@
         return;
       }
       var item = uploadQueue[idx++];
-      var category = item.newCatName || item.category;
+      var category = item.newCatName || item.category || "other";
       var reader = new FileReader();
       reader.onload = function (e) {
         /* 同名文件覆盖旧记录 */
@@ -1672,7 +1864,7 @@
   /* ============================================================
    * 分类管理（设置面板内）：添加 / 删除自定义分类
    * ============================================================ */
-  /* 当前全部分类：data.js 基础（隐藏的除外） + 自定义 + 上传图标中出现的新分类 */
+  /* 当前全部分类：data.js 基础（隐藏的除外） + 自定义 + 上传图标中出现的新分类（按用户自定义顺序） */
   function effectiveCatList() {
     var list = [];
     (DATA.categories || []).forEach(function (c) {
@@ -1688,6 +1880,20 @@
       var hit = list.some(function (x) { return x.key === ic.category || x.name === ic.category; });
       if (!hit) list.push({ key: ic.category, name: ic.category, source: "上传图标" });
     });
+    /* 应用用户自定义的分类顺序（categoryOrder 优先，未提及的分类按原顺序排在后面） */
+    if (categoryOrder && categoryOrder.length) {
+      var byKey = {};
+      list.forEach(function (c) { byKey[c.key] = c; });
+      var ordered = [];
+      var seen = {};
+      categoryOrder.forEach(function (k) {
+        if (byKey[k] && !seen[k]) { ordered.push(byKey[k]); seen[k] = 1; }
+      });
+      list.forEach(function (c) {
+        if (!seen[c.key]) { ordered.push(c); seen[c.key] = 1; }
+      });
+      list = ordered;
+    }
     return list;
   }
   function countInCategory(catKey) {
@@ -1703,6 +1909,12 @@
     box.textContent = "";
     effectiveCatList().forEach(function (c) {
       var row = el("div", "cat-item");
+      row.setAttribute("draggable", "true");
+      row.setAttribute("data-key", c.key);
+      row.setAttribute("role", "listitem");
+      var grip = el("span", "ci-grip");
+      grip.title = "拖动排序";
+      grip.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="18" r="1"/></svg>';
       var nm = el("span", "ci-name", c.name + "（" + countInCategory(c.key) + "）");
       var src = el("span", "ci-src", c.source);
       var del = el("button", "ci-del", "×");
@@ -1746,7 +1958,8 @@
           saveCustomCats(cats);
           customCategories = cats;
           var up = loadUploads().map(function (u) {
-            if (u.category === c.key) u.category = "other";
+            var cat = singleCat(u);
+            if (cat === c.key) u.category = "other";
             return u;
           });
           saveUploads(up);
@@ -1754,10 +1967,67 @@
           setTimeout(function () { location.reload(); }, 500);
         }
       });
+      row.appendChild(grip);
       row.appendChild(nm);
       row.appendChild(src);
       row.appendChild(del);
       box.appendChild(row);
+    });
+    bindCatDrag(box);
+  }
+  /* 分类拖拽排序：拖拽后保存新顺序并同步刷新分类栏与分类管理列表 */
+  function bindCatDrag(box) {
+    var dragKey = null;
+    box.addEventListener("dragstart", function (e) {
+      var row = e.target.closest ? e.target.closest(".cat-item") : null;
+      if (!row) return;
+      dragKey = row.getAttribute("data-key");
+      if (!dragKey) return;
+      e.dataTransfer.effectAllowed = "move";
+      try { e.dataTransfer.setData("text/plain", dragKey); } catch (err) {}
+      row.classList.add("dragging");
+      box.classList.add("drag-over");
+    });
+    box.addEventListener("dragover", function (e) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+    });
+    box.addEventListener("drop", function (e) {
+      e.preventDefault();
+      box.classList.remove("drag-over");
+      if (!dragKey) return;
+      var target = e.target.closest ? e.target.closest(".cat-item") : null;
+      if (!target) return;
+      var targetKey = target.getAttribute("data-key");
+      if (!targetKey || targetKey === dragKey) return;
+      var list = effectiveCatList();
+      var keys = list.map(function (c) { return c.key; });
+      var from = keys.indexOf(dragKey);
+      var to = keys.indexOf(targetKey);
+      if (from < 0 || to < 0) return;
+      /* 鼠标落在目标行下半部分则插到目标之后，否则插到目标之前 */
+      var after = false;
+      var rect = target.getBoundingClientRect();
+      if (rect.height > 0 && e.clientY > rect.top + rect.height / 2) after = true;
+      keys.splice(from, 1);
+      to = keys.indexOf(targetKey);
+      if (to < 0) to = keys.length;
+      if (after) to = to + 1;
+      keys.splice(to, 0, dragKey);
+      categoryOrder = keys.slice();
+      saveSettings({ category_order: categoryOrder }).then(function (ok) {
+        if (ok) {
+          renderCategories();
+          renderCatManage();
+          showToast("分类顺序已保存");
+        }
+      });
+    });
+    box.addEventListener("dragend", function () {
+      dragKey = null;
+      box.classList.remove("drag-over");
+      var rows = box.querySelectorAll(".cat-item.dragging");
+      for (var i = 0; i < rows.length; i++) rows[i].classList.remove("dragging");
     });
   }
   document.getElementById("cat-add").addEventListener("click", function () {
@@ -2108,6 +2378,7 @@
         try { s.deleted_categories = JSON.parse(localStorage.getItem(HIDDEN_CATS_KEY) || "[]"); } catch (e) { s.deleted_categories = []; }
         try { s.deleted_icons = JSON.parse(localStorage.getItem(HIDDEN_ICONS_KEY) || "[]"); } catch (e) { s.deleted_icons = []; }
         try { s.icon_moves = JSON.parse(localStorage.getItem(MOVES_KEY) || "{}"); } catch (e) { s.icon_moves = {}; }
+        try { s.category_order = JSON.parse(localStorage.getItem(CAT_ORDER_KEY) || "[]"); } catch (e) { s.category_order = []; }
         return s;
       })(),
       theme: (function () { try { return localStorage.getItem(THEME_KEY) || "auto"; } catch (e) { return "auto"; } })(),
@@ -2233,7 +2504,7 @@
         try { data = JSON.parse(new TextDecoder("utf-8").decode(dataEntry)); }
         catch (e) { showToast("data.json 解析失败，恢复中止"); return; }
         /* 上传记录若缺 dataUrl，则用压缩包内 icons/ 同名文件补成 DataURL */
-        var MIME_MAP = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", svg: "image/svg+xml", gif: "image/gif" };
+        var MIME_MAP = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", svg: "image/svg+xml", gif: "image/gif", ico: "image/x-icon", bmp: "image/bmp", icns: "image/icns" };
         var uploads = data.uploads || [];
         uploads.forEach(function (u) {
           if (!u.dataUrl && iconFiles[u.name]) {
@@ -2256,6 +2527,7 @@
           localStorage.setItem(HIDDEN_CATS_KEY, JSON.stringify(s.deleted_categories || []));
           localStorage.setItem(HIDDEN_ICONS_KEY, JSON.stringify(s.deleted_icons || []));
           localStorage.setItem(MOVES_KEY, JSON.stringify(s.icon_moves || {}));
+          localStorage.setItem(CAT_ORDER_KEY, JSON.stringify(s.category_order || []));
           if (data.theme) localStorage.setItem(THEME_KEY, data.theme);
           if (data.baseUrl != null) localStorage.setItem(BASE_KEY, data.baseUrl);
           if (data.auth) localStorage.setItem(AUTH_KEY, JSON.stringify(data.auth));

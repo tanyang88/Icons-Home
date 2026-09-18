@@ -54,7 +54,7 @@ import zipfile
 from email import policy
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
-ALLOWED_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".svg", ".gif"}
+ALLOWED_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".svg", ".gif", ".ico", ".bmp", ".icns"}
 MAX_BODY = 20 * 1024 * 1024  # 单次请求体上限 20MB
 
 ARGS = {"host": "0.0.0.0", "port": 8000, "dir": os.path.dirname(os.path.abspath(__file__))}
@@ -185,11 +185,24 @@ class UploadsStore:
         self._write(records)
 
     def upsert(self, name, category, link=""):
-        """新增或覆盖同名记录（含自定义链接与添加时间），返回最新列表"""
+        """新增或覆盖同名记录（含自定义链接与添加时间），返回最新列表
+        category 为单个分类；兼容历史数组数据（取第一个）"""
+        cat = self._norm_cat(category)
         records = [r for r in self.load() if r.get("name") != name]
-        records.append({"name": name, "category": category, "link": link, "added_at": time.time()})
+        records.append({"name": name, "category": cat, "link": link, "added_at": time.time()})
         self._write(records)
         return records
+
+    @staticmethod
+    def _norm_cat(category):
+        """规范化分类为单个字符串：列表/数组取第一个，字符串直接取；空则 'other'"""
+        if isinstance(category, list):
+            out = next((str(x).strip() for x in category if str(x).strip()), "")
+        elif isinstance(category, str):
+            out = category.strip()
+        else:
+            out = ""
+        return out or "other"
 
     def remove(self, name):
         """删除指定文件名的记录，返回最新列表"""
@@ -202,7 +215,7 @@ class UploadsStore:
         records = [dict(r) for r in self.load()]
         changed = False
         for r in records:
-            if r.get("category") == old_name:
+            if self._norm_cat(r.get("category")) == old_name:
                 r["category"] = new_name
                 changed = True
         if changed:
@@ -211,11 +224,12 @@ class UploadsStore:
 
     def move_many(self, names, category):
         """批量把指定文件名的记录移到目标分类，返回最新列表"""
+        cat = self._norm_cat(category)
         records = [dict(r) for r in self.load()]
         changed = False
         for r in records:
-            if r.get("name") in names and r.get("category") != category:
-                r["category"] = category
+            if r.get("name") in names and self._norm_cat(r.get("category")) != cat:
+                r["category"] = cat
                 changed = True
         if changed:
             self._write(records)
@@ -497,7 +511,7 @@ class Handler(SimpleHTTPRequestHandler):
             saved.append(name)
 
         if not saved:
-            self._err("没有可保存的文件（仅支持 png / jpg / webp / svg / gif）")
+            self._err("没有可保存的文件（仅支持 png / jpg / jpeg / webp / svg / gif / ico / bmp / icns）")
             return
 
         category = (fields.get("category") or "other").strip() or "other"
@@ -596,6 +610,15 @@ class Handler(SimpleHTTPRequestHandler):
         if "favicon" in data:
             f = (data.get("favicon") or "").strip()[:500]
             patch["favicon"] = f
+        if "category_order" in data:
+            order = data.get("category_order")
+            if not isinstance(order, list):
+                self._err("category_order 必须是数组")
+                return
+            order = [str(x).strip()[:50] for x in order]
+            order = [x for x in order if x]
+            # 去重保序
+            patch["category_order"] = list(dict.fromkeys(order))
         if not patch:
             self._err("没有可更新的字段")
             return
@@ -678,7 +701,7 @@ class Handler(SimpleHTTPRequestHandler):
                     # 服务模式记录不需要 dataUrl（图片会从 icons/* 落盘）
                     clean_up = []
                     for u in up:
-                        item = {"name": u.get("name", ""), "category": u.get("category", "other")}
+                        item = {"name": u.get("name", ""), "category": UploadsStore._norm_cat(u.get("category"))}
                         if u.get("link"):
                             item["link"] = u.get("link")
                         if u.get("added_at"):
@@ -698,6 +721,8 @@ class Handler(SimpleHTTPRequestHandler):
                         settings_obj["deleted_icons"] = st["deleted_icons"]
                     if st.get("icon_moves") and isinstance(st["icon_moves"], dict):
                         settings_obj["icon_moves"] = st["icon_moves"]
+                    if st.get("category_order") and isinstance(st["category_order"], list):
+                        settings_obj["category_order"] = st["category_order"]
                     _dump_json(os.path.join(data_dir, "settings.json"), settings_obj)
                     # 图片文件：DataURL 转二进制落盘 icons/
                     written = 0

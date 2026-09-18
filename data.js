@@ -2,14 +2,14 @@
  * Icons Home - 图标数据配置
  *
  * 添加一个图标的步骤（就两步）：
- *   1. 把图片文件放进 icons/ 目录（支持 svg / png / jpg / webp）
+ *   1. 把图片文件放进 icons/ 目录（支持 svg / png / jpg / jpeg / webp / gif / ico / bmp / icns）
  *   2. 在下方 icons 数组里加一条记录：
  *      { "category": "software", "file": "my-app.png", "link": "https://…" }
  *
  * 字段说明：
  *   category - 所属分类 id（必须与 categories 里的 id 一致）
  *   file     - icons/ 目录下的文件名
- *   link     - 可选。点击图标时跳转的自定义网址（新标签页打开），不填则点击图标改为复制链接
+ *   link     - 可选。卡片右上角按钮打开的自定义跳转网址（新标签页），不填则按钮提示无链接
  *   name     - 可选。默认不写：图标下方名称自动取文件名（不含扩展名）；
  *              需要与文件名不同的显示名时，才加这个字段覆盖
  *
@@ -39,15 +39,9 @@ var ICON_DATA = {
     { "id": "other",    "name": "其他" }
   ],
 
-  /* 图标列表：
+  /* 图标列表（默认无图标，全部由网页端上传管理）：
    *   - 名称自动取文件名（不含扩展名），一般不需要写 name
-   *   - link 为占位示例，替换成你自己的地址 */
-  "icons": [
-    { "category": "software", "file": "software.svg", "link": "https://example.com/software" },
-    { "category": "website",  "file": "website.svg",  "link": "https://example.com/website" },
-    { "category": "dev",      "file": "dev.svg",      "link": "https://example.com/dev" },
-    { "category": "media",    "file": "media.svg",    "link": "https://example.com/media" },
-    { "category": "game",     "file": "game.svg",     "link": "https://example.com/game" },
-    { "category": "other",    "file": "other.svg" }
-  ]
+   *   - link 为上传时自定义的跳转链接
+   *   - 在网页右上角「上传图标」中添加；服务模式写入服务器 data/uploads.json 与 icons/ 目录 */
+  "icons": []
 };
