@@ -37,6 +37,7 @@ nginx 反代：见 README.md「用 nginx 反代上传服务」
     POST /api/categories/delete   删除自定义分类并把其下上传图标移到 other（需登录）
     POST /api/delete              删除网页上传的图标：删 icons/ 文件 + uploads 记录（需登录）
     POST /api/move                批量移动上传图标的分类（需登录，JSON：{names: [...], category}）
+    POST /api/rename              重命名上传图标：改 icons/ 文件 + uploads 记录 + 引用同步（需登录，JSON：{old, new}）
     POST /api/settings            更新站点设置（需登录；title? / deleted_categories? / deleted_icons? / icon_moves? / favicon?）
     GET  /api/backup              备份：打包 icons/ + data/ 为「项目名_时间戳.zip」下载（需登录）
     POST /api/restore             恢复：接收备份 zip 并覆盖 icons/ 与 data/（需登录，multipart file）
@@ -235,6 +236,19 @@ class UploadsStore:
             self._write(records)
         return records
 
+    def rename(self, old, new):
+        """重命名记录的文件名（old→new），返回最新列表；old 不存在或 new 已占用返回 None"""
+        records = [dict(r) for r in self.load()]
+        if not any(r.get("name") == old for r in records):
+            return None
+        if any(r.get("name") == new for r in records):
+            return None
+        for r in records:
+            if r.get("name") == old:
+                r["name"] = new
+        self._write(records)
+        return records
+
 
 class CategoriesStore:
     """data/categories.json：网页端自定义分类（以 name 为唯一标识）"""
@@ -404,7 +418,7 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             self._handle_restore()
             return
-        if path in ("/api/categories", "/api/categories/delete", "/api/delete", "/api/move", "/api/settings"):
+        if path in ("/api/categories", "/api/categories/delete", "/api/delete", "/api/move", "/api/rename", "/api/settings"):
             if not self._check_auth():
                 self._err("未登录或登录已过期，请重新登录", 401, "auth")
                 return
@@ -419,6 +433,8 @@ class Handler(SimpleHTTPRequestHandler):
                 self._handle_delete_icon(data)
             elif path == "/api/move":
                 self._handle_move(data)
+            elif path == "/api/rename":
+                self._handle_rename(data)
             else:
                 self._handle_update_settings(data)
             return
@@ -574,6 +590,65 @@ class Handler(SimpleHTTPRequestHandler):
         records = self.store.move_many(names, category)
         self._json({"ok": True, "uploads": records})
 
+    def _handle_rename(self, data):
+        """重命名上传图标：改 icons/ 文件 + uploads 记录 + settings 里移动记录/隐藏记录的文件名引用"""
+        old_raw = (data.get("old") or "").strip()
+        new_raw = (data.get("new") or "").strip()
+        old_name = clean_filename(old_raw)
+        new_name = clean_filename(new_raw)
+        if not old_name or not new_name:
+            self._err("文件名无效")
+            return
+        # 拒绝含非法字符/路径的名字（clean_filename 会静默替换，这里要求一致）
+        if old_raw != old_name or new_raw != new_name:
+            self._err("文件名包含非法字符（\\ / : * ? \" < > |）")
+            return
+        if old_name == new_name:
+            self._err("新文件名与当前相同")
+            return
+        # 扩展名锁定：不允许通过改名改变扩展名，防止图标格式错乱
+        if os.path.splitext(old_name)[1].lower() != os.path.splitext(new_name)[1].lower():
+            self._err("扩展名不能修改（仅允许修改文件名主体）")
+            return
+        records = self.store.load()
+        if not any(r.get("name") == old_name for r in records):
+            self._err("该图标不是网页上传的图标（data.js 基础图标请编辑 data.js 后手动重命名 icons/ 下文件）")
+            return
+        old_path = os.path.join(ARGS["dir"], "icons", old_name)
+        new_path = os.path.join(ARGS["dir"], "icons", new_name)
+        if not os.path.isfile(old_path):
+            self._err("服务器上找不到原图标文件：" + old_name)
+            return
+        if os.path.exists(new_path):
+            self._err("已存在同名文件：" + new_name)
+            return
+        # 1) 重命名文件
+        os.rename(old_path, new_path)
+        # 2) 更新 uploads 记录（含冲突检测，失败则回滚文件）
+        updated = self.store.rename(old_name, new_name)
+        if updated is None:
+            try:
+                os.rename(new_path, old_path)
+            except Exception:
+                pass
+            self._err("重命名冲突：目标文件名已存在")
+            return
+        # 3) 同步 settings.json 中按文件名记录的引用（icon_moves / deleted_icons）
+        try:
+            st = self.settings.load()
+            changed = False
+            if isinstance(st.get("icon_moves"), dict) and old_name in st["icon_moves"]:
+                st["icon_moves"][new_name] = st["icon_moves"].pop(old_name)
+                changed = True
+            if isinstance(st.get("deleted_icons"), list):
+                st["deleted_icons"] = [new_name if x == old_name else x for x in st["deleted_icons"]]
+                changed = True
+            if changed:
+                self.settings.update(st)
+        except Exception:
+            pass
+        self._json({"ok": True, "uploads": updated})
+
     # ---------- 站点设置 ----------
     def _handle_update_settings(self, data):
         """更新站点设置：标题 / 隐藏的基础分类 / 隐藏的基础图标 / 图标移动记录 / favicon"""
@@ -619,6 +694,10 @@ class Handler(SimpleHTTPRequestHandler):
             order = [x for x in order if x]
             # 去重保序
             patch["category_order"] = list(dict.fromkeys(order))
+        if "lang" in data:
+            lang = (data.get("lang") or "").strip()[:10].lower()
+            if lang in ("zh", "en"):
+                patch["lang"] = lang
         if not patch:
             self._err("没有可更新的字段")
             return
