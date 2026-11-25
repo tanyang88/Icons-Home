@@ -372,6 +372,14 @@
   .fi-del:hover { color: #ff7b72; }
   /* 图标预览弹窗 */
   .preview-wrap { width: min(860px, 94vw); max-width: 100%; max-height: 90vh; }
+  /* 预览窗口上方居中的文件名（含扩展名） */
+  .preview-file {
+    text-align: center; padding: 2px 44px 6px;
+    font-size: 12.5px; line-height: 1.5; color: var(--muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .preview-file.empty { display: none; }
   .preview-body {
     padding: 14px; overflow: auto; display: flex; align-items: flex-start; justify-content: center;
     min-height: 120px; background: var(--bg);
@@ -595,7 +603,7 @@
             <circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/>
           </svg>
           <input type="text" class="search-input" id="search-input"
-                 placeholder="搜索图标名称或描述…" aria-label="搜索图标" data-i18n data-i18n-ph="搜索图标名称或描述…" data-i18n-aria="搜索图标">
+                 placeholder="搜索" aria-label="搜索图标" data-i18n data-i18n-ph="搜索" data-i18n-aria="搜索图标">
         </div>
         <button type="button" class="icon-btn" id="upload-btn" aria-label="上传图标" data-i18n-aria="上传图标">
           <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -773,7 +781,7 @@
     </div>
     <div class="upload-manage about-box">
       <h4 data-i18n="关于">关于</h4>
-      <p class="um-tip about-version"><span data-i18n="当前版本：">当前版本：</span><b>7.5</b></p>
+      <p class="um-tip about-version"><span data-i18n="当前版本：">当前版本：</span><b>7.6</b></p>
     </div>
   </div>
 
@@ -843,6 +851,7 @@
           <button type="button" class="modal-close" id="preview-close" aria-label="关闭" data-i18n-aria="关闭">×</button>
         </div>
       </div>
+      <div class="preview-file" id="preview-file" title=""></div>
       <div class="preview-body" id="preview-body">
         <img id="preview-img" alt="图标预览">
       </div>
@@ -935,6 +944,22 @@
   var uploadSubmit = document.getElementById("upload-submit");
   var uploadQueue = [];
 
+  /* 点击遮罩关闭弹窗：要求「按下」和「抬起」都发生在遮罩本身。
+     这样在弹窗内用鼠标拖选文字、指针滑出弹窗外时不会误关弹窗。 */
+  function bindMaskClose(mask, closeFn) {
+    var downOnMask = false;
+    mask.addEventListener("pointerdown", function (e) {
+      downOnMask = (e.target === mask);
+    });
+    mask.addEventListener("pointerup", function (e) {
+      var hit = downOnMask && e.target === mask;
+      downOnMask = false;
+      if (hit) closeFn();
+    });
+    mask.addEventListener("pointercancel", function () { downOnMask = false; });
+    mask.addEventListener("dragstart", function () { downOnMask = false; });
+  }
+
   /* 整理模式 DOM */
   var manageDock = document.getElementById("manage-dock");
   var manageTools = document.getElementById("manage-tools");
@@ -973,7 +998,7 @@
   var showExt = true;
   if (!SERVER_MODE) { try { showExt = localStorage.getItem(SHOW_EXT_KEY) !== "0"; } catch (e) {} }
   var I18N = {
-  "搜索图标名称或描述…": "Search icon name or description…",
+  "搜索": "Search",
   "搜索图标": "Search icons",
   "上传": "Upload",
   "上传图标": "Uploaded",
@@ -1406,7 +1431,7 @@
   document.getElementById("login-btn").addEventListener("click", openLogin);
   document.getElementById("login-close").addEventListener("click", closeLogin);
   document.getElementById("login-cancel").addEventListener("click", closeLogin);
-  loginMask.addEventListener("click", function (e) { if (e.target === loginMask) closeLogin(); });
+  bindMaskClose(loginMask, closeLogin);
 
   function submitLogin() {
     var u = loginUsername.value.trim();
@@ -1909,12 +1934,19 @@
   /* ---------- 图标预览：放大镜按钮 → 弹出预览窗口（默认原始尺寸，可缩放） ---------- */
   var previewMask = document.getElementById("preview-mask");
   var previewImg = document.getElementById("preview-img");
+  var previewFile = document.getElementById("preview-file");
   var previewScaleEl = document.getElementById("preview-scale");
   var previewNote = document.getElementById("preview-note");
   var previewScale = 1;
   var previewFitBase = 1;
   function openPreview(ic) {
     var src = iconSrc(ic);
+    var fname = ic.file || ic.name || "";
+    if (previewFile) {
+      previewFile.textContent = fname;
+      previewFile.title = fname;
+      previewFile.classList.toggle("empty", !fname);
+    }
     previewScale = 1;
     previewScaleEl.textContent = "100%";
     previewNote.textContent = _t("滚轮或按钮可缩放；默认 100% 原始尺寸");
@@ -1966,7 +1998,7 @@
     previewScale = previewFitBase || 1;
     applyPreviewScale();
   });
-  previewMask.addEventListener("click", function (e) { if (e.target === previewMask) closePreview(); });
+  bindMaskClose(previewMask, closePreview);
   document.addEventListener("keydown", function (e) {
     if (e.key === "Escape" && previewMask.classList.contains("open")) closePreview();
   });
@@ -2015,7 +2047,7 @@
   }
   document.getElementById("rename-close").addEventListener("click", closeRename);
   document.getElementById("rename-cancel").addEventListener("click", closeRename);
-  renameMask.addEventListener("click", function (e) { if (e.target === renameMask) closeRename(); });
+  bindMaskClose(renameMask, closeRename);
 
   function doRename() {
     if (!renameTarget) return;
@@ -2273,9 +2305,7 @@
   document.getElementById("upload-btn").addEventListener("click", openUpload);
   document.getElementById("upload-close").addEventListener("click", closeUpload);
   document.getElementById("upload-cancel").addEventListener("click", closeUpload);
-  uploadMask.addEventListener("click", function (e) {
-    if (e.target === uploadMask) closeUpload();
-  });
+  bindMaskClose(uploadMask, closeUpload);
 
   dropzone.addEventListener("click", function () { fileInput.click(); });
   dropzone.addEventListener("keydown", function (e) {
