@@ -37,8 +37,8 @@ nginx 反代：见 README.md「用 nginx 反代上传服务」
     POST /api/categories/delete   删除自定义分类并把其下上传图标移到 other（需登录）
     POST /api/delete              删除网页上传的图标：删 icons/ 文件 + uploads 记录（需登录）
     POST /api/move                批量移动上传图标的分类（需登录，JSON：{names: [...], category}）
-    POST /api/rename              重命名上传图标：改 icons/ 文件 + uploads 记录 + 引用同步（需登录，JSON：{old, new}）
-    POST /api/settings            更新站点设置（需登录；title? / deleted_categories? / deleted_icons? / icon_moves? / favicon?）
+    POST /api/rename              重命名上传图标：改 icons/ 文件 + uploads 记录 + 引用同步，可一并修改跳转链接（需登录，JSON：{old, new, link?}）
+    POST /api/settings            更新站点设置（需登录；title? / deleted_categories? / deleted_icons? / icon_moves? / favicon? / lang? / show_ext? / login_max_attempts? / login_lock_minutes?）
     GET  /api/backup              备份：打包 icons/ + data/ 为「项目名_时间戳.zip」下载（需登录）
     POST /api/restore             恢复：接收备份 zip 并覆盖 icons/ 与 data/（需登录，multipart file）
 """
@@ -54,6 +54,7 @@ import time
 import zipfile
 from email import policy
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import unquote
 
 ALLOWED_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".svg", ".gif", ".ico", ".bmp", ".icns"}
 MAX_BODY = 20 * 1024 * 1024  # 单次请求体上限 20MB
@@ -62,6 +63,8 @@ ARGS = {"host": "0.0.0.0", "port": 8000, "dir": os.path.dirname(os.path.abspath(
 
 # 写接口（需登录）：token -> username（内存，重启失效）
 TOKENS = {}
+# 登录失败计数 / 锁定状态（内存，重启失效）：username -> {"count": n, "locked_until": ts}
+FAILS = {}
 
 
 def parse_args(argv):
@@ -236,8 +239,8 @@ class UploadsStore:
             self._write(records)
         return records
 
-    def rename(self, old, new):
-        """重命名记录的文件名（old→new），返回最新列表；old 不存在或 new 已占用返回 None"""
+    def rename(self, old, new, link=None):
+        """重命名记录的文件名（old→new），可选同步更新跳转链接 link；old 不存在或 new 已占用返回 None"""
         records = [dict(r) for r in self.load()]
         if not any(r.get("name") == old for r in records):
             return None
@@ -246,6 +249,8 @@ class UploadsStore:
         for r in records:
             if r.get("name") == old:
                 r["name"] = new
+                if link is not None:
+                    r["link"] = link
         self._write(records)
         return records
 
@@ -335,6 +340,7 @@ class Handler(SimpleHTTPRequestHandler):
         self.auth = AuthStore(data_dir)
         super().__init__(*args, **kwargs)
 
+
     # ---------- 响应工具 ----------
     def _json(self, obj, code=200):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
@@ -380,7 +386,20 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             self._handle_backup()
             return
+        # 安全：禁止直接下载数据目录（含加盐哈希 auth.json 等敏感文件），先做 URL 解码防绕过
+        try:
+            norm = unquote(path).replace("\\", "/").split("#")[0].lower()
+        except Exception:
+            norm = path
+        if norm.startswith("/data/") or norm.rstrip("/") == "/data":
+            self._err("禁止访问", 403)
+            return
         super().do_GET()
+
+    def list_directory(self, path):
+        # 关闭目录列表，避免泄露服务端文件结构
+        self._err("目录列表已关闭", 403)
+        return None
 
     # ---------- POST ----------
     def do_POST(self):
@@ -459,12 +478,38 @@ class Handler(SimpleHTTPRequestHandler):
     def _handle_login(self, data):
         username = (data.get("username") or "").strip()
         password = data.get("password") or ""
+        # 登录防护：从 settings 读最大失败次数与锁定时长（0 表示不限制）
+        st = self.settings.load()
+        try:
+            max_attempts = int(st.get("login_max_attempts", 5) or 0)
+        except (TypeError, ValueError):
+            max_attempts = 5
+        try:
+            lock_min = int(st.get("login_lock_minutes", 5) or 0)
+        except (TypeError, ValueError):
+            lock_min = 5
+        now = time.time()
+        rec = FAILS.get(username) or {"count": 0, "locked_until": 0}
+        if rec.get("locked_until", 0) > now:
+            wait = int(rec["locked_until"] - now)
+            self._json({"ok": False, "code": "locked", "retry_after": wait,
+                        "error": "失败次数过多，请 %d 秒后重试" % wait}, 429)
+            return
         if self.auth.verify(username, password):
+            FAILS.pop(username, None)
             token = secrets.token_hex(16)
             TOKENS[token] = username
             self._json({"ok": True, "token": token, "username": username})
-        else:
-            self._err("用户名或密码错误", 401)
+            return
+        rec["count"] = int(rec.get("count", 0)) + 1
+        if max_attempts > 0 and rec["count"] >= max_attempts and lock_min > 0:
+            rec["locked_until"] = now + lock_min * 60
+            FAILS[username] = rec
+            self._json({"ok": False, "code": "locked", "retry_after": int(lock_min * 60),
+                        "error": "连续失败 %d 次，账户已锁定 %d 分钟" % (max_attempts, lock_min)}, 429)
+            return
+        FAILS[username] = rec
+        self._err("用户名或密码错误", 401)
 
     def _handle_change_password(self, data):
         username = self._auth_user()
@@ -594,6 +639,9 @@ class Handler(SimpleHTTPRequestHandler):
         """重命名上传图标：改 icons/ 文件 + uploads 记录 + settings 里移动记录/隐藏记录的文件名引用"""
         old_raw = (data.get("old") or "").strip()
         new_raw = (data.get("new") or "").strip()
+        new_link = None
+        if "link" in data:
+            new_link = (data.get("link") or "").strip()[:500]
         old_name = clean_filename(old_raw)
         new_name = clean_filename(new_raw)
         if not old_name or not new_name:
@@ -625,7 +673,7 @@ class Handler(SimpleHTTPRequestHandler):
         # 1) 重命名文件
         os.rename(old_path, new_path)
         # 2) 更新 uploads 记录（含冲突检测，失败则回滚文件）
-        updated = self.store.rename(old_name, new_name)
+        updated = self.store.rename(old_name, new_name, new_link)
         if updated is None:
             try:
                 os.rename(new_path, old_path)
@@ -698,6 +746,20 @@ class Handler(SimpleHTTPRequestHandler):
             lang = (data.get("lang") or "").strip()[:10].lower()
             if lang in ("zh", "en"):
                 patch["lang"] = lang
+        if "show_ext" in data:
+            patch["show_ext"] = bool(data.get("show_ext"))
+        if "login_max_attempts" in data:
+            v = data.get("login_max_attempts")
+            if isinstance(v, bool) or not isinstance(v, int) or v < 0 or v > 100:
+                self._err("登录失败次数需为 0-100 的整数")
+                return
+            patch["login_max_attempts"] = v
+        if "login_lock_minutes" in data:
+            v = data.get("login_lock_minutes")
+            if isinstance(v, bool) or not isinstance(v, int) or v < 0 or v > 1440:
+                self._err("锁定时长需为 0-1440 的整数分钟")
+                return
+            patch["login_lock_minutes"] = v
         if not patch:
             self._err("没有可更新的字段")
             return
@@ -871,7 +933,27 @@ class Handler(SimpleHTTPRequestHandler):
         return files, fields
 
     def log_message(self, fmt, *args):
-        sys.stderr.write("[icons-home] " + fmt % args + "\n")
+        # 静音端口探测与畸形请求噪音：扫描器/TLS 握手包等引发的 400 直接忽略，
+        # 正常访问（200/3xx/404 等）照常记录。
+        try:
+            msg = fmt % args
+        except Exception:
+            msg = fmt
+        if msg.startswith("code 400") or " 400 " in msg:
+            return
+        sys.stderr.write("[icons-home] " + msg + "\n")
+
+
+class IconsHTTPServer(ThreadingHTTPServer):
+    def handle_error(self, request, client_address):
+        # 静音扫描器/探测流量常见的连接类噪音（客户端提前断开等），其余异常照常打印
+        try:
+            exc = sys.exc_info()[1]
+            if isinstance(exc, (ConnectionAbortedError, ConnectionResetError, BrokenPipeError, TimeoutError)):
+                return
+        except Exception:
+            pass
+        super().handle_error(request, client_address)
 
 
 def main():
@@ -884,7 +966,7 @@ def main():
     AuthStore(os.path.join(ARGS["dir"], "data"))
     os.makedirs(os.path.join(ARGS["dir"], "icons"), exist_ok=True)
 
-    server = ThreadingHTTPServer((ARGS["host"], ARGS["port"]), Handler)
+    server = IconsHTTPServer((ARGS["host"], ARGS["port"]), Handler)
     url = "http://%s:%d/index.html" % (ARGS["host"], ARGS["port"])
     print("Icons Home 已启动：" + url)
     print("项目目录：" + ARGS["dir"])
