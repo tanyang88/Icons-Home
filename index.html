@@ -152,6 +152,20 @@
     grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
     gap: 14px;
   }
+  /* 把图标文件拖到图标区时：整块高亮，提示松手后加入上传列表、落到哪个分类 */
+  main { position: relative; }
+  .drop-overlay {
+    position: absolute; inset: 0; z-index: 30; display: none;
+    flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+    border: 2px dashed var(--accent); border-radius: 14px;
+    background: var(--accent-soft); color: var(--text);
+    text-align: center; padding: 20px; pointer-events: none;
+  }
+  .drop-overlay.show { display: flex; }
+  .drop-overlay .dov-cat {
+    display: inline-block; padding: 4px 12px; border-radius: 999px;
+    background: var(--accent); color: #fff; font-size: 13px; font-weight: 600;
+  }
   .card {
     position: relative;
     background: var(--surface);
@@ -661,6 +675,10 @@
   <!-- ===== 图标网格 ===== -->
   <main>
     <div class="grid" id="grid"></div>
+    <div class="drop-overlay" id="drop-overlay" aria-hidden="true">
+      <div data-i18n="松开鼠标，图标将加入上传列表">松开鼠标，图标将加入上传列表</div>
+      <div class="dov-cat" id="drop-overlay-cat"></div>
+    </div>
   </main>
 
   <!-- ===== 页脚 ===== -->
@@ -787,7 +805,7 @@
     </div>
     <div class="upload-manage about-box">
       <h4 data-i18n="关于">关于</h4>
-      <p class="um-tip about-version"><span data-i18n="当前版本：">当前版本：</span><b>7.6.1</b></p>
+      <p class="um-tip about-version"><span data-i18n="当前版本：">当前版本：</span><b>7.7.0</b></p>
     </div>
   </div>
 
@@ -1005,6 +1023,8 @@
   if (!SERVER_MODE) { try { showExt = localStorage.getItem(SHOW_EXT_KEY) !== "0"; } catch (e) {} }
   var I18N = {
   "搜索": "Search",
+  "松开鼠标，图标将加入上传列表": "Release to add the icon to the upload list",
+  "请先登录管理员账号，再拖拽图标上传": "Please log in as admin before dragging icons to upload",
   "搜索图标": "Search icons",
   "上传": "Upload",
   "上传图标": "Uploaded",
@@ -2334,14 +2354,17 @@
     this.value = "";
   });
 
-  function addUploadFiles(list) {
+  function addUploadFiles(list, forcedCat) {
     var added = 0;
     Array.prototype.forEach.call(list, function (f) {
       if (!isAllowedImage(f)) {
         showToast(_t("已跳过不支持的格式：") + f.name + _t("（支持 png / jpg / jpeg / webp / svg / gif / ico / bmp / icns）"));
         return;
       }
-      uploadQueue.push({ file: f, name: f.name, cats: [], size: f.size });
+      var item = { file: f, name: f.name, cats: [], size: f.size };
+      /* forcedCat：从图标区拖拽进来时，直接锁定目标分类（不再按上次选择推断） */
+      if (forcedCat) item.category = forcedCat;
+      uploadQueue.push(item);
       added++;
     });
     if (added) {
@@ -2349,6 +2372,75 @@
       if (!uploadMask.classList.contains("open")) openUpload();
     }
   }
+
+  /* ---------- 拖拽图标文件到图标区 → 自动打开上传弹窗，并预选当前分类 ---------- */
+  var dropOverlay = document.getElementById("drop-overlay");
+  var dropOverlayCat = document.getElementById("drop-overlay-cat");
+  var dropDepth = 0;
+
+  /* 只处理「拖文件」这种拖拽；整理模式里拖动图标（text/plain）不参与 */
+  function isFileDrag(e) {
+    var dt = e.dataTransfer;
+    if (!dt) return false;
+    var types = dt.types || [];
+    for (var i = 0; i < types.length; i++) {
+      if (types[i] === "Files") return true;
+    }
+    return false;
+  }
+  /* 拖进来的图标落到当前所在分类；当前是「全部」时没有具体分类，落到兜底的「其他」 */
+  function dropCatId() {
+    return state.category === "all" ? "other" : state.category;
+  }
+  function dropCatName() {
+    var id = dropCatId();
+    var hit = effectiveCatList().filter(function (c) { return c.key === id; })[0];
+    return hit ? _tCat(hit.key, hit.name) : _tCat(id, id);
+  }
+  function showDropOverlay() {
+    if (!dropOverlay) return;
+    dropOverlayCat.textContent = dropCatName();
+    dropOverlay.classList.add("show");
+  }
+  function hideDropOverlay() {
+    dropDepth = 0;
+    if (dropOverlay) dropOverlay.classList.remove("show");
+  }
+  grid.parentNode.addEventListener("dragenter", function (e) {
+    if (!isFileDrag(e)) return;
+    e.preventDefault();
+    dropDepth++;
+    showDropOverlay();
+  });
+  grid.parentNode.addEventListener("dragover", function (e) {
+    if (!isFileDrag(e)) return;
+    e.preventDefault();
+    try { e.dataTransfer.dropEffect = "copy"; } catch (err) {}
+    showDropOverlay();
+  });
+  grid.parentNode.addEventListener("dragleave", function (e) {
+    if (!isFileDrag(e)) return;
+    dropDepth--;
+    if (dropDepth <= 0) hideDropOverlay();
+  });
+  grid.parentNode.addEventListener("drop", function (e) {
+    if (!isFileDrag(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    hideDropOverlay();
+    if (!isAdmin()) {
+      showToast(_t("请先登录管理员账号，再拖拽图标上传"));
+      return;
+    }
+    addUploadFiles(e.dataTransfer.files, dropCatId());
+  });
+  /* 文件拖到页面其它位置时，阻止浏览器直接打开该文件 */
+  document.addEventListener("dragover", function (e) {
+    if (isFileDrag(e)) e.preventDefault();
+  });
+  document.addEventListener("drop", function (e) {
+    if (isFileDrag(e)) e.preventDefault();
+  });
 
   function renderUploadList() {
     fileList.textContent = "";
