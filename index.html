@@ -329,6 +329,15 @@
     padding: 15px 20px; border-bottom: 1px solid var(--border);
   }
   .modal-head h3 { font-size: 16px; }
+  /* 覆盖同名文件确认框：层级高于上传弹窗，避免被遮住 */
+  #confirm-mask { z-index: 60; }
+  .confirm-wrap { width: 410px; }
+  .confirm-msg { margin: 0; font-size: 13.5px; line-height: 1.8; color: var(--text); }
+  .confirm-msg .cf-name {
+    display: inline; padding: 1px 6px; border-radius: 5px;
+    background: var(--bg); border: 1px solid var(--border);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px;
+  }
   .modal-close {
     background: none; border: none; color: var(--muted);
     font-size: 22px; line-height: 1; cursor: pointer; padding: 2px 6px;
@@ -359,6 +368,7 @@
   .file-item .fi-info { flex: 1; min-width: 0; }
   .file-item .fi-name { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .file-item .fi-size { font-size: 11px; color: var(--muted); }
+  .file-item .fi-ovr { font-size: 11px; color: var(--accent); margin-top: 2px; }
   .file-item select {
     background: var(--bg); color: var(--text); border: 1px solid var(--border);
     border-radius: 8px; padding: 7px 8px; font-size: 13px; outline: none;
@@ -805,7 +815,7 @@
     </div>
     <div class="upload-manage about-box">
       <h4 data-i18n="关于">关于</h4>
-      <p class="um-tip about-version"><span data-i18n="当前版本：">当前版本：</span><b>7.7.0</b></p>
+      <p class="um-tip about-version"><span data-i18n="当前版本：">当前版本：</span><b>7.8.0</b></p>
     </div>
   </div>
 
@@ -833,6 +843,23 @@
 
   <!-- ===== 提示气泡 ===== -->
   <div class="toast" id="toast" role="status"></div>
+
+  <!-- ===== 覆盖同名文件确认弹窗 ===== -->
+  <div class="modal-mask" id="confirm-mask">
+    <div class="modal confirm-wrap" role="dialog" aria-label="覆盖已有文件">
+      <div class="modal-head">
+        <h3 data-i18n="覆盖已有文件？">覆盖已有文件？</h3>
+        <button type="button" class="modal-close" id="confirm-close" aria-label="关闭" data-i18n-aria="关闭">×</button>
+      </div>
+      <div class="modal-body">
+        <p class="confirm-msg" id="confirm-msg"></p>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn-plain" id="confirm-cancel" data-i18n="取消">取消</button>
+        <button type="button" class="btn-primary" id="confirm-ok" data-i18n="确认">确认</button>
+      </div>
+    </div>
+  </div>
 
   <!-- ===== 图标重命名弹窗 ===== -->
   <div class="modal-mask" id="rename-mask">
@@ -1025,6 +1052,12 @@
   "搜索": "Search",
   "松开鼠标，图标将加入上传列表": "Release to add the icon to the upload list",
   "请先登录管理员账号，再拖拽图标上传": "Please log in as admin before dragging icons to upload",
+  "覆盖已有文件？": "Overwrite existing file?",
+  "确认": "Confirm",
+  "已有同名图标文件": "An icon file with the same name already exists: ",
+  "，确认后会用本次上传的文件覆盖它（分类、跳转链接按本次设置更新）。": " — confirming will overwrite it with the file you upload now (category and link follow this upload).",
+  "将覆盖同名文件": "Will overwrite the existing file",
+  "已取消上传同名文件：": "Skipped file with the same name: ",
   "搜索图标": "Search icons",
   "上传": "Upload",
   "上传图标": "Uploaded",
@@ -1646,7 +1679,13 @@
         return { name: u.name, category: cat, file: u.name, link: u.link || "", desc: "本地上传", _src: u.dataUrl, _uploaded: true, added_at: u.added_at || 0 };
       });
     }
-    return configured.concat(uploaded);
+    /* 同名覆盖：上传记录优先，data.js 里同名的旧条目不再重复显示
+       （覆盖 data.js 基础图标后只保留一张卡片，不会出现两个同名图标） */
+    var uploadedNames = {};
+    uploaded.forEach(function (u) { uploadedNames[u.file] = true; });
+    return configured.filter(function (ic) {
+      return !uploadedNames[ic.file];
+    }).concat(uploaded);
   }
   function iconSrc(ic) {
     return ic._src ? ic._src : "icons/" + ic.file;
@@ -2314,7 +2353,11 @@
     }
   });
   document.addEventListener("keydown", function (e) {
-    if (e.key === "Escape") { settingsPanel.classList.remove("open"); closeUpload(); }
+    if (e.key === "Escape") {
+      /* 覆盖确认框开着时，Esc 只关它，别把上传弹窗一起关掉 */
+      if (confirmMask && confirmMask.classList.contains("open")) { settleConfirm(false); return; }
+      settingsPanel.classList.remove("open"); closeUpload();
+    }
   });
 
   /* ============================================================
@@ -2354,23 +2397,92 @@
     this.value = "";
   });
 
+  /* ---------- 覆盖同名文件确认：加入上传列表前逐个询问 ---------- */
+  var confirmMask = document.getElementById("confirm-mask");
+  var confirmMsg = document.getElementById("confirm-msg");
+  var confirmOk = document.getElementById("confirm-ok");
+  var confirmCancel = document.getElementById("confirm-cancel");
+  var confirmCloseBtn = document.getElementById("confirm-close");
+  var confirmResolve = null;
+
+  /* 是否已存在同名图标文件：名称含后缀、完全一致才算（队列里的文件也算） */
+  function nameAlreadyUsed(name) {
+    var hit = false;
+    allIcons().forEach(function (ic) {
+      if (!hit && (ic.file || ic.name) === name) hit = true;
+    });
+    if (hit) return true;
+    for (var i = 0; i < uploadQueue.length; i++) {
+      if (uploadQueue[i].name === name) return true;
+    }
+    return false;
+  }
+
+  function askOverwrite(name) {
+    /* 让确认框出现在上传弹窗之上（拖到图标区时上传弹窗可能还没开） */
+    if (!uploadMask.classList.contains("open")) openUpload();
+    return new Promise(function (resolve) {
+      confirmResolve = resolve;
+      confirmMsg.textContent = "";
+      confirmMsg.appendChild(document.createTextNode(_t("已有同名图标文件")));
+      confirmMsg.appendChild(el("span", "cf-name", name));
+      confirmMsg.appendChild(document.createTextNode(_t("，确认后会用本次上传的文件覆盖它（分类、跳转链接按本次设置更新）。")));
+      confirmMask.classList.add("open");
+      setTimeout(function () { confirmOk.focus(); }, 30);
+    });
+  }
+  function settleConfirm(ok) {
+    var r = confirmResolve;
+    confirmResolve = null;
+    confirmMask.classList.remove("open");
+    if (r) r(ok);
+  }
+  confirmOk.addEventListener("click", function () { settleConfirm(true); });
+  confirmCancel.addEventListener("click", function () { settleConfirm(false); });
+  confirmCloseBtn.addEventListener("click", function () { settleConfirm(false); });
+  bindMaskClose(confirmMask, function () { settleConfirm(false); });
+
   function addUploadFiles(list, forcedCat) {
+    var files = Array.prototype.slice.call(list || []);
+    var i = 0;
     var added = 0;
-    Array.prototype.forEach.call(list, function (f) {
-      if (!isAllowedImage(f)) {
-        showToast(_t("已跳过不支持的格式：") + f.name + _t("（支持 png / jpg / jpeg / webp / svg / gif / ico / bmp / icns）"));
-        return;
-      }
+
+    function pushItem(f, overwrite) {
       var item = { file: f, name: f.name, cats: [], size: f.size };
       /* forcedCat：从图标区拖拽进来时，直接锁定目标分类（不再按上次选择推断） */
       if (forcedCat) item.category = forcedCat;
+      if (overwrite) item.overwrite = true;
       uploadQueue.push(item);
       added++;
-    });
-    if (added) {
       renderUploadList();
       if (!uploadMask.classList.contains("open")) openUpload();
     }
+
+    function step() {
+      if (i >= files.length) return;
+      var f = files[i++];
+      if (!isAllowedImage(f)) {
+        showToast(_t("已跳过不支持的格式：") + f.name + _t("（支持 png / jpg / jpeg / webp / svg / gif / ico / bmp / icns）"));
+        step();
+        return;
+      }
+      /* 同名文件：先问「是否覆盖已有文件」，确认才入列表，取消就跳过这个文件 */
+      if (nameAlreadyUsed(f.name)) {
+        askOverwrite(f.name).then(function (ok) {
+          if (ok) {
+            pushItem(f, true);
+          } else {
+            showToast(_t("已取消上传同名文件：") + f.name);
+            if (!added && !uploadQueue.length) closeUpload();
+          }
+          step();
+        });
+        return;
+      }
+      pushItem(f, false);
+      step();
+    }
+    step();
   }
 
   /* ---------- 拖拽图标文件到图标区 → 自动打开上传弹窗，并预选当前分类 ---------- */
@@ -2454,6 +2566,7 @@
       var info = el("div", "fi-info");
       info.appendChild(el("div", "fi-name", item.name));
       info.appendChild(el("div", "fi-size", (item.size / 1024).toFixed(1) + " KB"));
+      if (item.overwrite) info.appendChild(el("div", "fi-ovr", _t("将覆盖同名文件")));
 
       var sel = document.createElement("select");
       sel.setAttribute("aria-label", _t("选择分类：") + item.name);
