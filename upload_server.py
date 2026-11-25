@@ -190,8 +190,13 @@ class UploadsStore:
 
     def upsert(self, name, category, link=""):
         """新增或覆盖同名记录（含自定义链接与添加时间），返回最新列表
-        category 为单个分类；兼容历史数组数据（取第一个）"""
+        category 为单个分类；兼容历史数组数据（取第一个）
+        覆盖同名记录时若本次 link 为空，则保留原记录的跳转链接（不静默清空）"""
         cat = self._norm_cat(category)
+        link = (link or "").strip()
+        old = next((r for r in self.load() if r.get("name") == name), None)
+        if not link and old and (old.get("link") or "").strip():
+            link = old.get("link").strip()
         records = [r for r in self.load() if r.get("name") != name]
         records.append({"name": name, "category": cat, "link": link, "added_at": time.time()})
         self._write(records)

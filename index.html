@@ -424,6 +424,8 @@
   .preview-zoom:hover { border-color: var(--accent); color: var(--accent); }
   .preview-zoom:disabled { opacity: .4; cursor: not-allowed; }
   .preview-scale { font-size: 12px; color: var(--muted); min-width: 44px; text-align: center; }
+  .preview-dim { font-size: 12px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .preview-dim:empty { display: none; }
   .preview-note { padding: 8px 14px 4px; font-size: 12px; color: var(--muted); }
   .modal-foot {
     display: flex; justify-content: flex-end; gap: 10px;
@@ -815,7 +817,7 @@
     </div>
     <div class="upload-manage about-box">
       <h4 data-i18n="关于">关于</h4>
-      <p class="um-tip about-version"><span data-i18n="当前版本：">当前版本：</span><b>7.8.1</b></p>
+      <p class="um-tip about-version"><span data-i18n="当前版本：">当前版本：</span><b>7.8.2</b></p>
     </div>
   </div>
 
@@ -896,6 +898,7 @@
         <h3 id="preview-title" data-i18n="图标预览">图标预览</h3>
         <div class="preview-tools">
           <button type="button" class="preview-zoom" id="preview-zoom-out" aria-label="缩小" title="缩小" data-i18n-aria="缩小" data-i18n-title="缩小">−</button>
+          <span class="preview-dim" id="preview-dim"></span>
           <span class="preview-scale" id="preview-scale">100%</span>
           <button type="button" class="preview-zoom" id="preview-zoom-in" aria-label="放大" title="放大" data-i18n-aria="放大" data-i18n-title="放大">+</button>
           <button type="button" class="preview-zoom" id="preview-fit" aria-label="适应窗口" title="适应窗口" data-i18n-aria="适应窗口" data-i18n-title="适应窗口">⤢</button>
@@ -1167,6 +1170,7 @@
   "放大": "Zoom in",
   "适应窗口": "Fit window",
   "滚轮或按钮可缩放；默认 100% 原始尺寸": "Use the wheel or buttons to zoom; default 100% original size",
+  "原始分辨率：": "Original size: ",
   "该图片格式当前浏览器无法预览（如 .icns），可下载后本地查看": "This format cannot be previewed in the browser (e.g. .icns); download and view it locally",
   "用户名": "Username",
   "密码": "Password",
@@ -1695,7 +1699,10 @@
     }).concat(uploaded);
   }
   function iconSrc(ic) {
-    return ic._src ? ic._src : "icons/" + ic.file;
+    if (ic._src) return ic._src;
+    /* 上传过的图标带版本号：同名覆盖后 URL 变化，避免浏览器沿用旧图片缓存 */
+    var v = (ic._uploaded && ic.added_at) ? "?v=" + Math.round(ic.added_at) : "";
+    return "icons/" + ic.file + v;
   }
 
   function copyText(text, done) {
@@ -2008,6 +2015,7 @@
   var previewImg = document.getElementById("preview-img");
   var previewFile = document.getElementById("preview-file");
   var previewScaleEl = document.getElementById("preview-scale");
+  var previewDim = document.getElementById("preview-dim");
   var previewNote = document.getElementById("preview-note");
   var previewScale = 1;
   var previewFitBase = 1;
@@ -2021,12 +2029,20 @@
     }
     previewScale = 1;
     previewScaleEl.textContent = "100%";
+    if (previewDim) previewDim.textContent = "";
     previewNote.textContent = _t("滚轮或按钮可缩放；默认 100% 原始尺寸");
     previewImg.onload = function () {
       /* 记录「适应窗口」基准比例 = 容器可容纳的最大宽度 / 图片原始宽度 */
       var body = document.getElementById("preview-body");
       var avail = Math.max(body.clientWidth - 4, 80);
       previewFitBase = Math.min(1, avail / (previewImg.naturalWidth || avail));
+      /* 显示图标原始分辨率（自然宽 × 自然高） */
+      if (previewDim) {
+        var nw = previewImg.naturalWidth || 0;
+        var nh = previewImg.naturalHeight || 0;
+        previewDim.textContent = (nw && nh) ? (nw + " × " + nh) : "";
+        previewDim.title = (nw && nh) ? _t("原始分辨率：") + nw + " × " + nh + " px" : "";
+      }
       applyPreviewScale();
       previewMask.classList.add("open");
       document.body.style.overflow = "hidden";
@@ -2485,7 +2501,12 @@
       var item = { file: f, name: f.name, cats: [], size: f.size };
       /* forcedCat：从图标区拖拽进来时，直接锁定目标分类（不再按上次选择推断） */
       if (forcedCat) item.category = forcedCat;
-      if (overwrite) item.overwrite = true;
+      if (overwrite) {
+        item.overwrite = true;
+        /* 覆盖同名图标时，先把原图标的跳转链接带过来，避免「留空就清空原链接」 */
+        var prev = allIcons().filter(function (x) { return x.file === f.name; })[0];
+        if (prev && prev.link) item.link = prev.link;
+      }
       uploadQueue.push(item);
       added++;
       renderUploadList();
@@ -2769,9 +2790,11 @@
       rememberActiveCat(category);
       var reader = new FileReader();
       reader.onload = function (e) {
-        /* 同名文件覆盖旧记录 */
+        /* 同名文件覆盖旧记录（旧记录有跳转链接而本次没填时，保留原链接） */
+        var oldOne = list.filter(function (u) { return u.name === item.name; })[0];
+        var keepLink = item.link || ((oldOne && oldOne.link) || "");
         list = list.filter(function (u) { return u.name !== item.name; });
-        list.push({ name: item.name, category: category, link: item.link || "", dataUrl: e.target.result, added_at: Date.now() });
+        list.push({ name: item.name, category: category, link: keepLink, dataUrl: e.target.result, added_at: Date.now() });
         next();
       };
       reader.onerror = function () {
