@@ -815,7 +815,7 @@
     </div>
     <div class="upload-manage about-box">
       <h4 data-i18n="关于">关于</h4>
-      <p class="um-tip about-version"><span data-i18n="当前版本：">当前版本：</span><b>7.8.0</b></p>
+      <p class="um-tip about-version"><span data-i18n="当前版本：">当前版本：</span><b>7.8.1</b></p>
     </div>
   </div>
 
@@ -863,9 +863,9 @@
 
   <!-- ===== 图标重命名弹窗 ===== -->
   <div class="modal-mask" id="rename-mask">
-    <div class="modal" role="dialog" aria-label="重命名图标">
+    <div class="modal" role="dialog" aria-label="编辑图标">
       <div class="modal-head">
-        <h3 id="rename-title" data-i18n="重命名图标">重命名图标</h3>
+        <h3 id="rename-title" data-i18n="编辑图标">编辑图标</h3>
         <button type="button" class="modal-close" id="rename-close" aria-label="关闭" data-i18n-aria="关闭">×</button>
       </div>
       <div class="modal-body">
@@ -880,7 +880,7 @@
         <span class="input-wrap" style="display:flex;margin-bottom:10px;">
         <input type="text" id="rename-link" placeholder="输入跳转链接，留空则清除" autocomplete="off" data-i18n data-i18n-ph="输入跳转链接，留空则清除">
         </span>
-        <p class="rename-tip" id="rename-tip" data-i18n="重命名后：图标下方名称、图标链接与移动记录将同步更新（服务模式会重命名服务器 icons/ 目录中的图片文件）。">重命名后：图标下方名称、图标链接与移动记录将同步更新（服务模式会同步重命名服务器 icons/ 目录中的图片文件）。</p>
+        <p class="rename-tip" id="rename-tip" data-i18n="保存后：图标名称、跳转链接与移动记录会同步更新；只改跳转链接时文件名保持不变，不会重命名服务器上的图片文件。">保存后：图标名称、跳转链接与移动记录会同步更新；只改跳转链接时文件名保持不变，不会重命名服务器上的图片文件。</p>
       </div>
       <div class="modal-foot">
         <button type="button" class="btn-plain" id="rename-cancel" data-i18n="取消">取消</button>
@@ -1150,10 +1150,17 @@
   "选择分类：": "Category: ",
   "跳转链接：": "Jump link: ",
   "重命名图标": "Rename icon",
-  "重命名该图标": "Rename this icon",
+  "编辑图标": "Edit icon",
+  "编辑该图标": "Edit this icon",
+  "编辑 ": "Edit ",
   "新文件名（仅修改名称，扩展名保持不变）": "New file name (only the name changes; the extension stays the same)",
   "输入新文件名": "Enter a new file name",
-  "重命名后：图标下方名称、图标链接与移动记录将同步更新（服务模式会重命名服务器 icons/ 目录中的图片文件）。": "After renaming: the name below the icon, its link and the move record all update (server mode also renames the image file in the server icons/ directory).",
+  "保存后：图标名称、跳转链接与移动记录会同步更新；只改跳转链接时文件名保持不变，不会重命名服务器上的图片文件。": "After saving: the icon name, jump link and move record are updated. If you only change the jump link, the file name stays the same and no image file is renamed on the server.",
+  "跳转链接没有变化": "The jump link has not changed",
+  "已保存跳转链接": "Jump link saved",
+  "已清除跳转链接": "Jump link cleared",
+  "保存失败：": "Save failed: ",
+  "无法连接服务，保存链接失败": "Cannot reach the server, saving the link failed",
   "（无扩展名）": "(no extension)",
   "图标预览": "Preview",
   "缩小": "Zoom out",
@@ -1925,9 +1932,9 @@
           /* 重命名按钮（仅管理员可见）：上传图标可重命名（含服务器文件）；data.js 基础图标禁用 */
           var renBtn = el("button", "card-rename");
           renBtn.type = "button";
-          renBtn.setAttribute("aria-label", _t("重命名 ") + displayName(ic));
+          renBtn.setAttribute("aria-label", _t("编辑 ") + displayName(ic));
           if (ic._uploaded) {
-            renBtn.title = _t("重命名该图标");
+            renBtn.title = _t("编辑该图标");
           } else {
             renBtn.disabled = true;
             renBtn.title = _t("data.js 基础图标不支持网页重命名，请编辑 data.js 后手动重命名 icons/ 下文件");
@@ -2100,7 +2107,7 @@
     renameInput.value = base;
     renameExt.textContent = ext ? "." + ext : _t("（无扩展名）");
     renameLink.value = ic.link || "";
-    renameTip.textContent = _t("重命名后：图标下方名称、图标链接与移动记录将同步更新（服务模式会重命名服务器 icons/ 目录中的图片文件）。");
+    renameTip.textContent = _t("保存后：图标名称、跳转链接与移动记录会同步更新；只改跳转链接时文件名保持不变，不会重命名服务器上的图片文件。");
     renameMask.classList.add("open");
     document.body.style.overflow = "hidden";
     setTimeout(function () { renameInput.focus(); renameInput.select(); }, 50);
@@ -2114,9 +2121,35 @@
   document.getElementById("rename-cancel").addEventListener("click", closeRename);
   bindMaskClose(renameMask, closeRename);
 
+  /* 仅修改跳转链接（文件名不变）：不算重命名，直接更新 link */
+  function saveLinkOnly(ic, linkVal) {
+    if (linkVal === (ic.link || "")) { closeRename(); showToast(_t("跳转链接没有变化")); return; }
+    if (SERVER_MODE) {
+      api("api/rename", "POST", JSON.stringify({ old: ic.file, new: ic.file, link: linkVal }), true).then(function (res) {
+        if (res && res.ok) {
+          ic.link = linkVal;
+          closeRename();
+          showToast(linkVal ? _t("已保存跳转链接") : _t("已清除跳转链接"));
+        } else {
+          showToast(_t("保存失败：") + ((res && res.error) || _t("未知错误")));
+        }
+      }).catch(function () { showToast(_t("无法连接服务，保存链接失败")); });
+    } else {
+      var up = loadUploads().map(function (u) {
+        if (u.name === ic.file) { u.link = linkVal; }
+        return u;
+      });
+      saveUploads(up);
+      ic.link = linkVal;
+      closeRename();
+      showToast(linkVal ? _t("已保存跳转链接") : _t("已清除跳转链接"));
+    }
+  }
+
   function doRename() {
     if (!renameTarget) return;
     var ic = renameTarget;
+    var linkVal = renameLink.value.trim();
     var m = /\.([^.]+)$/.exec(ic.file);
     var ext = m ? m[1] : "";
     var newBase = renameInput.value.trim().replace(/\s+/g, " ").replace(/[\.]+$/, "");
@@ -2124,12 +2157,13 @@
     if (RENAME_ILLEGAL.test(newBase)) { showToast(_t("文件名包含非法字符") + "（\\ / : * ? \" < > |）"); renameInput.focus(); return; }
     if (RENAME_RESERVED.test(newBase)) { showToast("该名称已被系统保留，请换一个"); renameInput.focus(); return; }
     var newName = ext ? newBase + "." + ext : newBase;
-    if (newName === ic.file) { showToast("新文件名与当前相同"); return; }
+    /* 文件名没改 → 只想改跳转链接，直接保存链接，不再拦「新文件名与当前相同」 */
+    if (newName === ic.file) { saveLinkOnly(ic, linkVal); return; }
     /* 与现有图标（含 data.js 基础图标）查重 */
     var exists = allIcons().some(function (x) { return x.file === newName; });
     if (exists) { showToast(_t("已存在同名图标「") + newName + _t("」，请换一个名称")); renameInput.focus(); return; }
     if (SERVER_MODE) {
-      api("api/rename", "POST", JSON.stringify({ old: ic.file, new: newName, link: renameLink.value.trim() }), true).then(function (res) {
+      api("api/rename", "POST", JSON.stringify({ old: ic.file, new: newName, link: linkVal }), true).then(function (res) {
         if (res && res.ok) {
           showToast("已重命名，正在刷新…");
           setTimeout(function () { location.reload(); }, 500);
@@ -2140,7 +2174,7 @@
     } else {
       /* 静态模式：本地记录重命名（图片为 DataURL，不受影响） */
       var up = loadUploads().map(function (u) {
-        if (u.name === ic.file) { u.name = newName; u.link = renameLink.value.trim(); }
+        if (u.name === ic.file) { u.name = newName; u.link = linkVal; }
         return u;
       });
       saveUploads(up);

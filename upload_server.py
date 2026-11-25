@@ -37,7 +37,7 @@ nginx 反代：见 README.md「用 nginx 反代上传服务」
     POST /api/categories/delete   删除自定义分类并把其下上传图标移到 other（需登录）
     POST /api/delete              删除网页上传的图标：删 icons/ 文件 + uploads 记录（需登录）
     POST /api/move                批量移动上传图标的分类（需登录，JSON：{names: [...], category}）
-    POST /api/rename              重命名上传图标：改 icons/ 文件 + uploads 记录 + 引用同步，可一并修改跳转链接（需登录，JSON：{old, new, link?}）
+    POST /api/rename              重命名上传图标：改 icons/ 文件 + uploads 记录 + 引用同步，可一并修改跳转链接；old 与 new 相同时视为「只改跳转链接」，不动图片文件（需登录，JSON：{old, new, link?}）
     POST /api/settings            更新站点设置（需登录；title? / deleted_categories? / deleted_icons? / icon_moves? / favicon? / lang? / show_ext? / login_max_attempts? / login_lock_minutes?）
     GET  /api/backup              备份：打包 icons/ + data/ 为「项目名_时间戳.zip」下载（需登录）
     POST /api/restore             恢复：接收备份 zip 并覆盖 icons/ 与 data/（需登录，multipart file）
@@ -237,6 +237,19 @@ class UploadsStore:
                 changed = True
         if changed:
             self._write(records)
+        return records
+
+    def set_link(self, name, link):
+        """仅更新某条记录的跳转链接（不改文件名）；记录不存在返回 None"""
+        records = [dict(r) for r in self.load()]
+        hit = False
+        for r in records:
+            if r.get("name") == name:
+                r["link"] = link
+                hit = True
+        if not hit:
+            return None
+        self._write(records)
         return records
 
     def rename(self, old, new, link=None):
@@ -652,7 +665,16 @@ class Handler(SimpleHTTPRequestHandler):
             self._err("文件名包含非法字符（\\ / : * ? \" < > |）")
             return
         if old_name == new_name:
-            self._err("新文件名与当前相同")
+            # 文件名没变：视为「只修改跳转链接」，不动 icons/ 里的图片文件
+            if new_link is None:
+                self._err("新文件名与当前相同")
+                return
+            records = self.store.load()
+            if not any(r.get("name") == old_name for r in records):
+                self._err("该图标不是网页上传的图标（data.js 基础图标请编辑 data.js 后手动重命名 icons/ 下文件）")
+                return
+            updated = self.store.set_link(old_name, new_link)
+            self._json({"ok": True, "renamed": False, "uploads": updated or []})
             return
         # 扩展名锁定：不允许通过改名改变扩展名，防止图标格式错乱
         if os.path.splitext(old_name)[1].lower() != os.path.splitext(new_name)[1].lower():
