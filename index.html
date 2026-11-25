@@ -817,7 +817,7 @@
     </div>
     <div class="upload-manage about-box">
       <h4 data-i18n="关于">关于</h4>
-      <p class="um-tip about-version"><span data-i18n="当前版本：">当前版本：</span><b>7.8.2</b></p>
+      <p class="um-tip about-version"><span data-i18n="当前版本：">当前版本：</span><b>7.8.3</b></p>
     </div>
   </div>
 
@@ -897,8 +897,8 @@
       <div class="modal-head">
         <h3 id="preview-title" data-i18n="图标预览">图标预览</h3>
         <div class="preview-tools">
-          <button type="button" class="preview-zoom" id="preview-zoom-out" aria-label="缩小" title="缩小" data-i18n-aria="缩小" data-i18n-title="缩小">−</button>
           <span class="preview-dim" id="preview-dim"></span>
+          <button type="button" class="preview-zoom" id="preview-zoom-out" aria-label="缩小" title="缩小" data-i18n-aria="缩小" data-i18n-title="缩小">−</button>
           <span class="preview-scale" id="preview-scale">100%</span>
           <button type="button" class="preview-zoom" id="preview-zoom-in" aria-label="放大" title="放大" data-i18n-aria="放大" data-i18n-title="放大">+</button>
           <button type="button" class="preview-zoom" id="preview-fit" aria-label="适应窗口" title="适应窗口" data-i18n-aria="适应窗口" data-i18n-title="适应窗口">⤢</button>
@@ -1170,7 +1170,7 @@
   "放大": "Zoom in",
   "适应窗口": "Fit window",
   "滚轮或按钮可缩放；默认 100% 原始尺寸": "Use the wheel or buttons to zoom; default 100% original size",
-  "原始分辨率：": "Original size: ",
+  "分辨率：": "Resolution: ",
   "该图片格式当前浏览器无法预览（如 .icns），可下载后本地查看": "This format cannot be previewed in the browser (e.g. .icns); download and view it locally",
   "用户名": "Username",
   "密码": "Password",
@@ -2040,8 +2040,8 @@
       if (previewDim) {
         var nw = previewImg.naturalWidth || 0;
         var nh = previewImg.naturalHeight || 0;
-        previewDim.textContent = (nw && nh) ? (nw + " × " + nh) : "";
-        previewDim.title = (nw && nh) ? _t("原始分辨率：") + nw + " × " + nh + " px" : "";
+        previewDim.textContent = (nw && nh) ? (_t("分辨率：") + nw + " × " + nh) : "";
+        previewDim.title = (nw && nh) ? _t("分辨率：") + nw + " × " + nh + " px" : "";
       }
       applyPreviewScale();
       previewMask.classList.add("open");
