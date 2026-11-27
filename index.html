@@ -147,6 +147,18 @@
     font-size: 13px; cursor: pointer; transition: border-color .15s, color .15s;
   }
   .sb-btn:hover { border-color: var(--accent); color: var(--accent); }
+  /* 格式筛选：紧跟「升序」按钮右侧的分隔线 + 一排格式小胶囊 */
+  .sortbar { flex-wrap: wrap; }
+  .sb-sep { width: 1px; height: 18px; background: var(--border); margin: 0 2px; }
+  .fmt-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .fmt-btn {
+    padding: 4px 10px; font-size: 12px; letter-spacing: .5px;
+    background: var(--surface); color: var(--muted);
+    border: 1px solid var(--border); border-radius: 999px; cursor: pointer;
+    transition: border-color .15s, color .15s, background .15s;
+  }
+  .fmt-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .fmt-btn.active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
   .grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
@@ -680,6 +692,9 @@
           <option value="time" data-i18n="按添加时间">按添加时间</option>
         </select>
         <button type="button" class="sb-btn" id="sort-toggle" data-i18n="升序" aria-label="切换排序方向" data-i18n-aria="切换排序方向">升序</button>
+        <span class="sb-sep" aria-hidden="true"></span>
+        <span data-i18n="格式">格式</span>
+        <div class="fmt-chips" id="fmt-chips" role="group" aria-label="按格式筛选" data-i18n-aria="按格式筛选"></div>
       </div>
     </div>
   </header>
@@ -817,7 +832,7 @@
     </div>
     <div class="upload-manage about-box">
       <h4 data-i18n="关于">关于</h4>
-      <p class="um-tip about-version"><span data-i18n="当前版本：">当前版本：</span><b>7.8.3</b></p>
+      <p class="um-tip about-version"><span data-i18n="当前版本：">当前版本：</span><b>7.9.0</b></p>
     </div>
   </div>
 
@@ -963,7 +978,7 @@
  * ============================================================ */
 (function () {
   var DATA = window.ICON_DATA || { title: "Icons Home", categories: [], icons: [] };
-  var state = { category: "all", keyword: "", sortBy: "name", sortOrder: "asc", manage: false, selected: {} };
+  var state = { category: "all", keyword: "", sortBy: "name", sortOrder: "asc", manage: false, selected: {}, format: "all" };
   var BASE_KEY = "icons-home-baseurl";
   var UPLOADS_KEY = "icons-home-uploads";
   var CATS_KEY = "icons-home-categories";
@@ -1075,6 +1090,8 @@
   "全部": "All",
   "图标分类": "Icon categories",
   "排序": "Sort",
+  "格式": "Format",
+  "按格式筛选": "Filter by format",
   "排序方式": "Sort by",
   "按名称": "Name",
   "按添加时间": "Time",
@@ -1698,6 +1715,13 @@
       return !uploadedNames[ic.file];
     }).concat(uploaded);
   }
+  /* 图标格式：取文件名扩展名，jpeg 归并为 jpg（用于格式筛选） */
+  function iconFormat(file) {
+    var m = /\.([^.]+)$/.exec(file || "");
+    var ext = m ? m[1].toLowerCase() : "";
+    if (ext === "jpeg") ext = "jpg";
+    return ext || "other";
+  }
   function iconSrc(ic) {
     if (ic._src) return ic._src;
     /* 上传过的图标带版本号：同名覆盖后 URL 变化，避免浏览器沿用旧图片缓存 */
@@ -1823,15 +1847,24 @@
     grid.textContent = "";
     var all = allIcons();
     var kw = state.keyword.toLowerCase();
+    var fmt = state.format;
     var matched = all.filter(function (ic) {
       if (state.category !== "all" && ic.category !== state.category) return false;
+      if (fmt !== "all" && iconFormat(ic.file) !== fmt) return false;
       if (!kw) return true;
       var hay = (displayName(ic) + " " + (ic.desc || "")).toLowerCase();
       return hay.indexOf(kw) !== -1;
     });
 
-    /* 页脚计数：全部时显示总数，切换分类时显示该分类图标数 */
-    var shownCount = state.category === "all" ? all.length : countInCategory(state.category);
+    /* 页脚计数：全部时显示总数，切换分类时显示该分类图标数；按格式筛选时显示匹配数量 */
+    var shownCount;
+    if (fmt !== "all") {
+      shownCount = all.filter(function (ic) {
+        return (state.category === "all" || ic.category === state.category) && iconFormat(ic.file) === fmt;
+      }).length;
+    } else {
+      shownCount = state.category === "all" ? all.length : countInCategory(state.category);
+    }
     document.getElementById("total-count").textContent = shownCount;
 
     /* 排序：按名称（中英文 localeCompare）或按添加时间，支持升序 / 降序 */
@@ -2218,6 +2251,27 @@
     state.keyword = this.value.trim();
     renderGrid();
   });
+
+  /* ---------- 格式筛选：升序按钮右侧的格式小胶囊（全部 / PNG / JPG / WEBP / SVG / GIF / ICO / BMP / ICNS） ---------- */
+  var FORMAT_LIST = ["all", "png", "jpg", "webp", "svg", "gif", "ico", "bmp", "icns"];
+  var fmtChips = document.getElementById("fmt-chips");
+  function renderFormatChips() {
+    if (!fmtChips) return;
+    fmtChips.textContent = "";
+    FORMAT_LIST.forEach(function (k) {
+      var b = el("button", "fmt-btn" + (state.format === k ? " active" : ""));
+      b.type = "button";
+      b.textContent = k === "all" ? _t("全部") : k.toUpperCase();
+      b.setAttribute("aria-pressed", state.format === k ? "true" : "false");
+      b.addEventListener("click", function () {
+        state.format = k;
+        renderFormatChips();
+        renderGrid();
+      });
+      fmtChips.appendChild(b);
+    });
+  }
+  renderFormatChips();
 
   /* ---------- 排序：按名称 / 添加时间，升序 / 降序 ---------- */
   document.getElementById("sort-select").addEventListener("change", function () {
